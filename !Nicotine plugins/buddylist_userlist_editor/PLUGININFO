@@ -1,0 +1,4 @@
+Version = "0.2.0"
+Authors = ["kiquja"]
+Name = "Buddy List / User List Editor"
+Description = "Standalone editor for the buddy-list sidebar and the room user list: width sliders, hide toggles, and a drag-resizable room user list (rebuilt as a native Gtk.Paned). Built to run alongside Theme Customizer. Commands: /buddylist or /bul."

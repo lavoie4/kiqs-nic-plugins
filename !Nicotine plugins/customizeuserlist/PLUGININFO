@@ -1,0 +1,4 @@
+Version = "1.1.0"
+Authors = ["kiquja"]
+Name = "Customize User List"
+Description = "Resize and hide Nicotine+'s room user list (member list) via set_width_request, and resize/hide the buddy-list sidebar by moving the existing Gtk.Paned divider — property and position changes only, no widget creation, wrapping or reparenting. Works on GTK 3 and GTK 4."
