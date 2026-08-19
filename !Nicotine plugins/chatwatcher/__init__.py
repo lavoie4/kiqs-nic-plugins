@@ -38,6 +38,7 @@ KEYWORDWATCH_LOG_FILENAME = "keywordwatch.log"
 SHITLIST_LOG_FILENAME = "shitlist.log"
 
 LOG_SUBFOLDER = "logs"
+LOG_DATE_FORMAT = "%Y-%m-%d"
 
 RETENTION_SECONDS = {
     "20 min": 20 * 60,
@@ -68,13 +69,11 @@ class Plugin(BasePlugin):
         # Every key is namespaced so the three feature sets stay independent.
         self.settings = {
             # Listenings
-            "listenings_clear_log": False,
             "listenings_blocked_users": [],
             "listenings_retention": "1 day",
             # Keyword Watch
             "kw_keywords": [],
             "kw_case_sensitive": False,
-            "kw_clear_log": False,
             "kw_blocked_users": [],
             "kw_retention": "1 day",
             # Shitlist
@@ -82,14 +81,13 @@ class Plugin(BasePlugin):
             "shitlist_keywords": [],
             "shitlist_users": [],
             "shitlist_show_messages": [],
+            # log rotation bookkeeping (first day each feature started logging)
+            "listenings_log_start": "",
+            "kw_log_start": "",
+            "shitlist_log_start": "",
         }
 
         self.metasettings = {
-            "listenings_clear_log": {
-                "description": "Played — clear the log now (tick to wipe the /nowplaying history)",
-                "group": "Played (/nowplaying)",
-                "type": "bool",
-            },
             "listenings_blocked_users": {
                 "description": "Played — hide these users (one username per line)",
                 "group": "Played (/nowplaying)",
@@ -108,11 +106,6 @@ class Plugin(BasePlugin):
             },
             "kw_case_sensitive": {
                 "description": "Keywords — match keywords case-sensitively",
-                "group": "Keywords",
-                "type": "bool",
-            },
-            "kw_clear_log": {
-                "description": "Keywords — clear the log now (tick to wipe)",
                 "group": "Keywords",
                 "type": "bool",
             },
@@ -138,8 +131,8 @@ class Plugin(BasePlugin):
                 "type": "list string",
             },
             "shitlist_show_messages": {
-                "description": "Ignored users whose messages still show (one username per line)",
-                "group": "Shitlist: Message Exceptions",
+                "description": "Public chat msg whitelist\nIgnored users whose messages still show in public rooms (they can't DM you). One username per line.",
+                "group": "Public chat msg whitelist",
                 "type": "list string",
             },
             "shitlist_users": {
@@ -189,7 +182,6 @@ class Plugin(BasePlugin):
         self._patched_main_window_class = None
 
         # --- shared timers ---
-        self._poll_id = None       # "clear log" setting poll
         self._prune_id = None      # periodic retention pruning
 
         # --- Shitlist runtime state ---
@@ -198,9 +190,6 @@ class Plugin(BasePlugin):
         self._shitlist_original_setup_user_menu = None
         self._shitlist_enabled = True
         self._shitlist_show_messages_set = set()
-        self._shitlist_original_is_user_ignored = None
-        self._shitlist_original_is_user_ip_ignored = None
-        self._shitlist_ignore_filter_patched = False
 
     @staticmethod
     def _new_feed(tab_name, tab_id, log_filename):
@@ -241,7 +230,6 @@ class Plugin(BasePlugin):
         self._remove_tab("keywordwatch")
         self._shitlist_enabled = False
         self._shitlist_restore_user_menu()
-        self._shitlist_restore_ignore_filter()
         self._shitlist_ignore_timers.clear()
         self._restore_header_bar()
 
@@ -262,7 +250,6 @@ class Plugin(BasePlugin):
 
         # Shitlist (patches happen here, matching the original Shitlist plugin)
         self._shitlist_sync_show_messages_set()
-        self._shitlist_patch_ignore_filter()
         self._shitlist_patch_user_menu()
 
     # ------------------------------------------------------------------ #
@@ -296,20 +283,21 @@ class Plugin(BasePlugin):
         return None
 
     # ------------------------------------------------------------------ #
-    # Chat hooks — Keywords + Shitlist (all rooms)
+    # Chat hooks — Keywords + Shitlist (global "Public" feed + private)
     #
-    # public_room_message_notification fires for EVERY joined room (Nicotine+'s
-    # global room feed), unlike incoming_public_chat_notification which only
-    # fires for the room currently being viewed. That's what makes keyword
-    # watching and keyword banning work across all rooms.
+    # public_room_message_notification fires ONLY for the global "Public" room
+    # (server code 152, the network-wide public-chat feed). It does NOT fire for
+    # individual joined rooms — those take a separate path (server code 13) and
+    # fire incoming_public_chat_notification, which this plugin does not hook.
     #
-    # The global feed bypasses Nicotine+'s ignore filter, so we re-apply it here
-    # for Played and Shitlist to keep genuinely-ignored users hidden. Keyword
-    # Watch is the exception: it intentionally collects keyword hits from
-    # ignored/banned users, because their room messages still arrive on this
-    # feed (#Public). Shitlist's "show messages from ignored users" whitelist
-    # patches NetworkFilter.is_user_ignored / is_user_ip_ignored to return False
-    # for those names, so their messages flow through to the other feeds too.
+    # The global feed bypasses Nicotine+'s ignore filter (the joined-room path
+    # checks is_user_ignored/is_user_ip_ignored, but the global path does not),
+    # so we re-apply it here for Played and Shitlist to keep genuinely-ignored
+    # users hidden. Keyword Watch is the exception: it intentionally collects
+    # keyword hits from ignored/banned users, because their messages still arrive
+    # on this feed (#Public). Shitlist's "show messages from ignored users"
+    # whitelist is applied locally below (the ignore re-check is skipped for
+    # those names), so their messages flow through to the other feeds too.
     # ------------------------------------------------------------------ #
 
     def public_room_message_notification(self, room, user, line):
@@ -318,7 +306,7 @@ class Plugin(BasePlugin):
 
         is_ignored = False
 
-        if user != "server":
+        if user != "server" and not self._shitlist_is_whitelisted(user):
             if self.core.network_filter.is_user_ignored(user):
                 is_ignored = True
             elif self.core.network_filter.is_user_ip_ignored(user):
@@ -421,52 +409,30 @@ class Plugin(BasePlugin):
         feed = self._feeds["listenings"]
         feed["entries"] = []
 
-        try:
-            with open(self._listenings_log_path(), "r", encoding="utf-8") as file_handle:
-                for line in file_handle:
-                    line = line.strip()
+        for item in self._load_daily_log(self._listenings_log_dir(), ("ts", "user", "text")):
+            entry = {
+                "ts": float(item["ts"]),
+                "user": str(item["user"]),
+                "text": str(item["text"]),
+            }
 
-                    if not line:
-                        continue
+            if item.get("self"):
+                entry["self"] = True
 
-                    try:
-                        item = json.loads(line)
-                    except ValueError:
-                        continue
+            if item.get("context"):
+                entry["context"] = str(item["context"])
 
-                    if not isinstance(item, dict):
-                        continue
+            feed["entries"].append(entry)
 
-                    if not all(key in item for key in ("ts", "user", "text")):
-                        continue
-
-                    entry = {
-                        "ts": float(item["ts"]),
-                        "user": str(item["user"]),
-                        "text": str(item["text"]),
-                    }
-
-                    if item.get("self"):
-                        entry["self"] = True
-
-                    if item.get("context"):
-                        entry["context"] = str(item["context"])
-
-                    feed["entries"].append(entry)
-        except OSError:
-            pass  # no log file yet
-
-        feed["entries"].reverse()
+        feed["entries"].sort(key=lambda entry: entry["ts"], reverse=True)
 
     def _listenings_save(self):
-        try:
-            os.makedirs(self._listenings_log_dir(), exist_ok=True)
-
-            with open(self._listenings_log_path(), "w", encoding="utf-8") as file_handle:
-                for item in reversed(self._feeds["listenings"]["entries"]):  # oldest first on disk
-                    file_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
-        except OSError as error:
-            self.log("Could not write Played log: %s", error)
+        self._save_daily_log(
+            self._feeds["listenings"]["entries"],
+            self._listenings_log_dir(),
+            "listenings_log_start",
+            "Played",
+        )
 
     def _listenings_prune(self):
         retention = RETENTION_SECONDS.get(self.settings.get("listenings_retention"))
@@ -592,46 +558,24 @@ class Plugin(BasePlugin):
         feed = self._feeds["keywordwatch"]
         feed["entries"] = []
 
-        try:
-            with open(self._kw_log_path(), "r", encoding="utf-8") as file_handle:
-                for line in file_handle:
-                    line = line.strip()
+        for item in self._load_daily_log(self._kw_log_dir(), ("ts", "user", "text")):
+            feed["entries"].append({
+                "ts": float(item["ts"]),
+                "user": str(item["user"]),
+                "room": str(item.get("room", "")),
+                "text": str(item["text"]),
+                "keywords": [str(k) for k in item.get("keywords", [])],
+            })
 
-                    if not line:
-                        continue
-
-                    try:
-                        item = json.loads(line)
-                    except ValueError:
-                        continue
-
-                    if not isinstance(item, dict):
-                        continue
-
-                    if not all(key in item for key in ("ts", "user", "text")):
-                        continue
-
-                    feed["entries"].append({
-                        "ts": float(item["ts"]),
-                        "user": str(item["user"]),
-                        "room": str(item.get("room", "")),
-                        "text": str(item["text"]),
-                        "keywords": [str(k) for k in item.get("keywords", [])],
-                    })
-        except OSError:
-            pass  # no log file yet
-
-        feed["entries"].reverse()
+        feed["entries"].sort(key=lambda entry: entry["ts"], reverse=True)
 
     def _kw_save(self):
-        try:
-            os.makedirs(self._kw_log_dir(), exist_ok=True)
-
-            with open(self._kw_log_path(), "w", encoding="utf-8") as file_handle:
-                for item in reversed(self._feeds["keywordwatch"]["entries"]):  # oldest first on disk
-                    file_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
-        except OSError as error:
-            self.log("Could not write Keywords log: %s", error)
+        self._save_daily_log(
+            self._feeds["keywordwatch"]["entries"],
+            self._kw_log_dir(),
+            "kw_log_start",
+            "Keywords",
+        )
 
     def _kw_prune(self):
         retention = RETENTION_SECONDS.get(self.settings.get("kw_retention"))
@@ -714,29 +658,11 @@ class Plugin(BasePlugin):
 
         self.settings["shitlist_users"] = normalized
 
-    def _shitlist_sync_users_list(self):
-        server = self.config.sections.get("server", {})
-        banned = {self._shitlist_normalize_username(username) for username in server.get("banlist", [])}
-        ignored = {self._shitlist_normalize_username(username) for username in server.get("ignorelist", [])}
-
-        # IP lists map ip -> username; include users blocked by IP too.
-        ip_banned = {
-            self._shitlist_normalize_username(username)
-            for username in (server.get("ipblocklist") or {}).values()
-            if isinstance(username, str)
-        }
-        ip_ignored = {
-            self._shitlist_normalize_username(username)
-            for username in (server.get("ipignorelist") or {}).values()
-            if isinstance(username, str)
-        }
-
-        banned.discard("")
-        ignored.discard("")
-        ip_banned.discard("")
-        ip_ignored.discard("")
-
-        self.settings["shitlist_users"] = sorted((banned & ignored) | (ip_banned & ip_ignored))
+    def _shitlist_is_whitelisted(self, username):
+        return (
+            isinstance(username, str)
+            and self._shitlist_normalize_username(username) in self._shitlist_show_messages_set
+        )
 
     def _shitlist_sync_show_messages_set(self):
         self._shitlist_show_messages_set = {
@@ -744,64 +670,6 @@ class Plugin(BasePlugin):
             for username in self.settings.get("shitlist_show_messages", [])
         }
         self._shitlist_show_messages_set.discard("")
-
-    def _shitlist_patch_ignore_filter(self):
-        if self._shitlist_ignore_filter_patched:
-            return
-
-        network_filter = self.core.network_filter
-        network_filter_class = type(network_filter)
-        plugin = self
-
-        original_user = network_filter_class.is_user_ignored
-        original_ip = network_filter_class.is_user_ip_ignored
-
-        def _is_whitelisted(username):
-            return (
-                isinstance(username, str)
-                and plugin._shitlist_normalize_username(username) in plugin._shitlist_show_messages_set
-            )
-
-        def patched_is_user_ignored(nf_self, username):
-            if _is_whitelisted(username):
-                return False
-
-            return original_user(nf_self, username)
-
-        def patched_is_user_ip_ignored(nf_self, username=None, ip_address=None):
-            if _is_whitelisted(username):
-                return False
-
-            return original_ip(nf_self, username, ip_address)
-
-        network_filter_class.is_user_ignored = patched_is_user_ignored
-        network_filter_class.is_user_ip_ignored = patched_is_user_ip_ignored
-
-        self._shitlist_original_is_user_ignored = original_user
-        self._shitlist_original_is_user_ip_ignored = original_ip
-        self._shitlist_ignore_filter_patched = True
-
-    def _shitlist_restore_ignore_filter(self):
-        if not self._shitlist_ignore_filter_patched:
-            return
-
-        network_filter_class = type(self.core.network_filter)
-
-        if self._shitlist_original_is_user_ignored is not None:
-            network_filter_class.is_user_ignored = self._shitlist_original_is_user_ignored
-
-        if self._shitlist_original_is_user_ip_ignored is not None:
-            network_filter_class.is_user_ip_ignored = self._shitlist_original_is_user_ip_ignored
-
-        self._shitlist_original_is_user_ignored = None
-        self._shitlist_original_is_user_ip_ignored = None
-        self._shitlist_ignore_filter_patched = False
-
-    def _shitlist_is_actually_ignored(self, username):
-        if self._shitlist_original_is_user_ignored is not None:
-            return self._shitlist_original_is_user_ignored(self.core.network_filter, username)
-
-        return self.core.network_filter.is_user_ignored(username)
 
     def _shitlist_get_user_ip(self, user):
         """Return the user's current IP address, or None if unknown/offline."""
@@ -907,13 +775,19 @@ class Plugin(BasePlugin):
         try:
             os.makedirs(self._shitlist_log_dir(), exist_ok=True)
 
-            with open(self._shitlist_log_path(), "a", encoding="utf-8") as file_handle:
+            with open(self._shitlist_daily_path(), "a", encoding="utf-8") as file_handle:
                 file_handle.write(json.dumps(entry) + "\n")
         except Exception as error:
             self.log("Failed to write the Shitlist ban log: %s", (error,))
 
     def _shitlist_log_path(self):
         return os.path.join(self._shitlist_log_dir(), SHITLIST_LOG_FILENAME)
+
+    def _shitlist_daily_path(self):
+        return os.path.join(
+            self._shitlist_log_dir(),
+            self._daily_filename(self._shitlist_log_dir(), "shitlist_log_start", self._date_key()),
+        )
 
     def _shitlist_unban(self, user):
         user = self._shitlist_normalize_username(user)
@@ -1052,6 +926,141 @@ class Plugin(BasePlugin):
     def _shitlist_log_dir(self):
         return os.path.join(self._logs_dir(), "shitlist")
 
+    # --- daily log rotation ------------------------------------------- #
+
+    @staticmethod
+    def _date_key(ts=None):
+        """'YYYY-MM-DD' for the given epoch (default: now), in local time."""
+        return time.strftime(LOG_DATE_FORMAT, time.localtime(time.time() if ts is None else ts))
+
+    @staticmethod
+    def _days_between(start_day, end_day):
+        """Whole days between two 'YYYY-MM-DD' date keys (end - start)."""
+        try:
+            start_t = time.mktime(time.strptime(start_day, LOG_DATE_FORMAT))
+            end_t = time.mktime(time.strptime(end_day, LOG_DATE_FORMAT))
+            return int(round((end_t - start_t) / 86400.0))
+        except (ValueError, OverflowError):
+            return 0
+
+    @staticmethod
+    def _day_from_log_name(name):
+        """'log3[2026-08-18].log' -> '2026-08-18' ('' if it doesn't match)."""
+        if "[" in name and "]" in name:
+            return name.split("[", 1)[1].split("]", 1)[0]
+
+        return ""
+
+    def _ensure_start_date(self, folder, start_key):
+        """Return the day-1 date for a feature, deriving it from existing daily
+        files (or today) the first time so numbering stays stable across restarts."""
+        start = self.settings.get(start_key) or ""
+
+        if start:
+            return start
+
+        days = []
+
+        if os.path.isdir(folder):
+            for name in os.listdir(folder):
+                day = self._day_from_log_name(name)
+
+                if day:
+                    days.append(day)
+
+        start = min(days) if days else self._date_key()
+        self.settings[start_key] = start
+        return start
+
+    def _daily_filename(self, folder, start_key, day):
+        start = self._ensure_start_date(folder, start_key)
+        return f"log{self._days_between(start, day) + 1}[{day}].log"
+
+    @staticmethod
+    def _read_log_file(path, entries, required):
+        try:
+            with open(path, "r", encoding="utf-8") as file_handle:
+                for line in file_handle:
+                    line = line.strip()
+
+                    if not line:
+                        continue
+
+                    try:
+                        item = json.loads(line)
+                    except ValueError:
+                        continue
+
+                    if not isinstance(item, dict):
+                        continue
+
+                    if not all(key in item for key in required):
+                        continue
+
+                    entries.append(item)
+        except OSError:
+            pass
+
+    def _load_daily_log(self, folder, required):
+        """Read every logN[date].log in `folder` (oldest day first) into a flat list."""
+        entries = []
+
+        if not os.path.isdir(folder):
+            return entries
+
+        names = [name for name in os.listdir(folder) if name.startswith("log") and name.endswith(".log")]
+        names.sort(key=self._day_from_log_name)
+
+        for name in names:
+            self._read_log_file(os.path.join(folder, name), entries, required)
+
+        return entries
+
+    def _save_daily_log(self, feed, folder, start_key, label):
+        """Write each entry to its own day's logN[date].log file, truncating stale
+        daily files so the folder always mirrors the current in-memory feed."""
+        try:
+            os.makedirs(folder, exist_ok=True)
+
+            by_day = {}
+
+            for entry in feed:
+                ts = entry.get("ts")
+
+                if ts is None:
+                    continue
+
+                day = self._date_key(float(ts))
+                by_day.setdefault(day, []).append(entry)
+
+            # Truncate every existing daily file first so removed/pruned entries
+            # don't linger on disk.
+            if os.path.isdir(folder):
+                for name in os.listdir(folder):
+                    if name.startswith("log") and name.endswith(".log"):
+                        try:
+                            with open(os.path.join(folder, name), "w", encoding="utf-8"):
+                                pass
+                        except OSError:
+                            pass
+
+            if by_day:
+                earliest = min(by_day)
+                start = self.settings.get(start_key) or ""
+
+                if not start or earliest < start:
+                    self.settings[start_key] = earliest
+
+                for day, day_entries in by_day.items():
+                    path = os.path.join(folder, self._daily_filename(folder, start_key, day))
+
+                    with open(path, "w", encoding="utf-8") as file_handle:
+                        for item in reversed(day_entries):  # oldest first on disk
+                            file_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+        except OSError as error:
+            self.log("Could not write %s log: %s", (label, error))
+
     @staticmethod
     def _normalize_keyword(keyword):
         """Strip surrounding quotes and whitespace from a keyword."""
@@ -1070,9 +1079,6 @@ class Plugin(BasePlugin):
     def _start_timers(self):
         from gi.repository import GLib
 
-        if self._poll_id is None:
-            self._poll_id = GLib.timeout_add(1000, self._poll_clear_settings)
-
         if self._prune_id is None:
             self._prune_id = GLib.timeout_add(60000, self._prune_tick)
 
@@ -1084,26 +1090,9 @@ class Plugin(BasePlugin):
                 GLib.source_remove(feed["build_id"])
                 feed["build_id"] = None
 
-        if self._poll_id is not None:
-            GLib.source_remove(self._poll_id)
-            self._poll_id = None
-
         if self._prune_id is not None:
             GLib.source_remove(self._prune_id)
             self._prune_id = None
-
-    def _poll_clear_settings(self):
-        """The 'clear log' settings are checkboxes; poll them and act on a toggle."""
-
-        if self.settings.get("listenings_clear_log"):
-            self.settings["listenings_clear_log"] = False
-            self._listenings_clear()
-
-        if self.settings.get("kw_clear_log"):
-            self.settings["kw_clear_log"] = False
-            self._kw_clear()
-
-        return True  # keep polling
 
     def _prune_tick(self):
         if self._listenings_prune():
@@ -1313,6 +1302,19 @@ class Plugin(BasePlugin):
                         self_._add_open_logs_buttons()
 
                     def _add_open_logs_buttons(self_):
+                        # One-click "Clear log" buttons (replaces the old
+                        # tick-to-clear checkboxes).
+                        for label, handler in (
+                            ("Clear Played Log", plugin._listenings_clear),
+                            ("Clear Keywords Log", plugin._kw_clear),
+                        ):
+                            button = plugin._make_toolbar_button(
+                                "edit-clear-all-symbolic", label,
+                                "Wipe this feature's log now"
+                            )
+                            button.connect("clicked", lambda _button, handler=handler: handler())
+                            plugin._box_add(self_.primary_container, button)
+
                         for label, handler in (
                             ("Open Played Log Folder", plugin._open_listenings_logs_clicked),
                             ("Open Keywords Log Folder", plugin._open_kw_logs_clicked),
@@ -1349,7 +1351,6 @@ class Plugin(BasePlugin):
                 dialog = ChatWatcherSettingsDialog(application)
                 application._chatwatcher_settings_dialog = dialog
 
-            self._shitlist_sync_users_list()
             dialog.update_settings(plugin_id=self.internal_name, plugin_settings=self.metasettings)
             dialog.present()
             return True
@@ -1485,10 +1486,6 @@ class Plugin(BasePlugin):
         return True
 
     def _chatwatcher_status(self):
-        # Refresh the Shitlisted Users view from the live ban+ignore lists so the
-        # count reflects the current state, not just the last settings save.
-        self._shitlist_sync_users_list()
-
         l_retention = self.settings.get("listenings_retention", "1 day")
         l_blocked = len(self.settings.get("listenings_blocked_users", []))
 
@@ -2097,16 +2094,12 @@ class Plugin(BasePlugin):
             subprocess.Popen(["xdg-open", path])
 
     def _copy_to_clipboard(self, text):
-        """Put text on the system clipboard (GTK 3 and GTK 4)."""
+        """Put text on the system clipboard via Nicotine+'s own clipboard helper
+        (handles both GTK 3 and GTK 4 correctly)."""
 
-        if self._is_gtk4():
-            from gi.repository import Gdk
+        from pynicotine.gtkgui.widgets import clipboard
 
-            Gdk.Display.get_default().get_clipboard().set_text(text)
-        else:
-            from gi.repository import Gdk, Gtk
-
-            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+        clipboard.copy_text(text)
 
     def _update_status(self, feed):
         if feed["status_label"] is None:

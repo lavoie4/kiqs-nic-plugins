@@ -1,17 +1,14 @@
-"""Page Doll — decorative transparent character image in Nicotine+ panes.
-
-Concept: Tumblr-style "page dolls" — a transparent PNG or animated GIF that sits
-in a pane as a decorative layer in a corner. The user controls the doll's exact
-width and height and its position.
+"""Page Doll — a small PNG "page doll" layered into Nicotine+ panes.
 
 Two panes are supported:
 
-* Private Chat — the doll is layered ON TOP of the chat notebook (it floats above
-  the chat text). Clicks pass through to the chat underneath.
-* Downloads — the doll is layered BEHIND the downloads list (the list text stays
-  readable on top of the doll).
+* Private Chat — the doll floats ON TOP of the chat notebook (corner-aligned;
+  clicks pass through).
+* Downloads — the doll is layered BEHIND the downloads list (the list text
+  stays on top of the doll), using the same Gtk.Overlay + transparent-CSS
+  technique the theme_customizer plugin uses for its background image.
 
-GTK 4 is required. On GTK 3 the plugin logs a notice and does nothing (no crash).
+PNG only. GTK 4 required; on GTK 3 the plugin no-ops gracefully.
 """
 
 import os
@@ -20,19 +17,18 @@ from pynicotine.pluginsystem import BasePlugin
 
 PRIVATE_CONTENT_ID = "private_content"
 DOWNLOADS_TREE_ID = "tree_container"
-DOWNLOADS_CSS_CLASS = "pagedoll-downloads"
+
+CSS_CLASS_DOWNLOADS = "pagedoll-downloads"
 
 DEFAULT_WIDTH = 160
 DEFAULT_HEIGHT = 240
 MIN_SIZE = 1
-# No practical size cap: generous ceilings only so spin buttons stay usable.
-MAX_WIDTH = 10000
-MAX_HEIGHT = 10000
-ALLOWED_EXTENSIONS = (".png", ".gif")
+MAX_SIZE = 4000
 DOLL_MARGIN = 12
 POLL_INTERVAL_MS = 1000
+LIVE_APPLY_DELAY_MS = 300
 
-POSITION_ALIGN = {
+POSITIONS = {
     "bottom-right": ("END", "END"),
     "bottom-left": ("START", "END"),
     "top-right": ("END", "START"),
@@ -83,7 +79,7 @@ class Plugin(BasePlugin):
                 "type": "bool",
             }
             self.metasettings[prefix + "image_path"] = {
-                "description": "Page doll image for %s (.png or .gif)" % pane["label"],
+                "description": "Page doll PNG for %s" % pane["label"],
                 "type": "file",
                 "chooser": "image",
             }
@@ -100,20 +96,20 @@ class Plugin(BasePlugin):
             self.metasettings[prefix + "position"] = {
                 "description": "Page doll position for %s" % pane["label"],
                 "type": "dropdown",
-                "options": list(POSITION_ALIGN.keys()),
+                "options": list(POSITIONS.keys()),
             }
 
         self.commands = {
             "pagedoll": {
                 "callback": self.pagedoll_command,
                 "description": "Page doll: settings | on | off | downloads on|off | refresh",
-                "parameters": ["[settings|on|off|downloads|refresh]"],
+                "parameters": ["[settings|set|on|off|refresh|downloads]"],
                 "group": "Page Doll",
             },
             "pd": {
                 "callback": self.pagedoll_command,
                 "description": "Short alias for /pagedoll",
-                "parameters": ["[settings|on|off|downloads|refresh]"],
+                "parameters": ["[settings|set|on|off|refresh|downloads]"],
                 "group": "Page Doll",
             },
         }
@@ -126,9 +122,11 @@ class Plugin(BasePlugin):
 
         self._css_provider = None
 
-        # Settings window
+        # Settings window.
         self._settings_window = None
         self._ui = {}
+        self._live_timeout = None
+        self._applying = False
 
     @staticmethod
     def _new_pane_state():
@@ -136,14 +134,10 @@ class Plugin(BasePlugin):
             "content": None,
             "mount_parent": None,
             "overlay": None,
-            "doll_box": None,
             "doll": None,
             "main_child": None,
             "tree": None,
             "signature": None,
-            "gif_timeout": None,
-            "gif_iter": None,
-            "gif_picture": None,
         }
 
     @staticmethod
@@ -162,7 +156,6 @@ class Plugin(BasePlugin):
         if not gtk:
             return
 
-        self._ensure_css(gtk)
         self._refresh_all(gtk)
         self._poll_id = gtk["GLib"].timeout_add(POLL_INTERVAL_MS, self._poll)
 
@@ -316,11 +309,11 @@ class Plugin(BasePlugin):
 
         prefix = pane["prefix"]
         path = self._clean_path(self.settings.get(prefix + "image_path", ""))
-        width = self._clamp_size(self.settings.get(prefix + "width", DEFAULT_WIDTH), MIN_SIZE, MAX_WIDTH)
-        height = self._clamp_size(self.settings.get(prefix + "height", DEFAULT_HEIGHT), MIN_SIZE, MAX_HEIGHT)
+        width = self._clamp_size(self.settings.get(prefix + "width", DEFAULT_WIDTH), MIN_SIZE, MAX_SIZE)
+        height = self._clamp_size(self.settings.get(prefix + "height", DEFAULT_HEIGHT), MIN_SIZE, MAX_SIZE)
         position = self.settings.get(prefix + "position", "bottom-right")
 
-        if position not in POSITION_ALIGN:
+        if position not in POSITIONS:
             position = "bottom-right"
 
         return (
@@ -330,6 +323,42 @@ class Plugin(BasePlugin):
             height,
             position,
         )
+
+    def _resolve(self, pane):
+        """Resolve the pane's doll settings to (path, width, height, position).
+
+        Returns None (after logging why) when the doll should not be shown.
+        """
+
+        prefix = pane["prefix"]
+
+        if not self.settings.get(prefix + "enabled", True):
+            return None
+
+        path = self._clean_path(self.settings.get(prefix + "image_path", ""))
+
+        if not path:
+            self.log("(%s): no image set. Use /pagedoll settings.", (pane["label"],))
+            return None
+
+        if not os.path.isfile(path):
+            self.log("(%s): image not found: %s", (pane["label"], path))
+            return None
+
+        extension = os.path.splitext(path)[1].lower()
+
+        if extension != ".png":
+            self.log("(%s): only .png is supported (got %s).", (pane["label"], extension))
+            return None
+
+        width = self._clamp_size(self.settings.get(prefix + "width", DEFAULT_WIDTH), MIN_SIZE, MAX_SIZE)
+        height = self._clamp_size(self.settings.get(prefix + "height", DEFAULT_HEIGHT), MIN_SIZE, MAX_SIZE)
+        position = self.settings.get(prefix + "position", "bottom-right")
+
+        if position not in POSITIONS:
+            position = "bottom-right"
+
+        return path, width, height, position
 
     # --- apply / restore --------------------------------------------------------
 
@@ -354,14 +383,14 @@ class Plugin(BasePlugin):
 
         Gtk = gtk["Gtk"]
         state = self._panes[pane["key"]]
-        prefix = pane["prefix"]
 
         self._teardown_on_top(pane, gtk)
 
-        state["content"] = self._find_widget_by_id(Gtk, self._find_main_window(Gtk), pane["container_id"])
+        content = self._find_widget_by_id(Gtk, self._find_main_window(Gtk), pane["container_id"])
+        state["content"] = content
         state["signature"] = self._pane_signature(pane)
 
-        if state["content"] is None:
+        if content is None:
             self.log("(%s): '%s' container not found in the window tree.", (pane["label"], pane["container_id"]))
             return
 
@@ -369,43 +398,16 @@ class Plugin(BasePlugin):
             self.log("Requires GTK 4. GTK 3 is a no-op.")
             return
 
-        if not self.settings.get(prefix + "enabled", True):
+        resolved = self._resolve(pane)
+
+        if resolved is None:
             return
 
-        path = self._clean_path(self.settings.get(prefix + "image_path", ""))
+        path, width, height, position = resolved
 
-        if not path:
-            self.log("(%s): no image set. Use /pagedoll settings.", (pane["label"],))
-            return
+        children = list(self._iter_children(Gtk, content))
 
-        if not os.path.isfile(path):
-            self.log("(%s): image not found: %s", (pane["label"], path))
-            return
-
-        extension = os.path.splitext(path)[1].lower()
-
-        if extension not in ALLOWED_EXTENSIONS:
-            self.log("(%s): unsupported image type %s (use .png or .gif)", (pane["label"], extension))
-            return
-
-        width = self._clamp_size(self.settings.get(prefix + "width", DEFAULT_WIDTH), MIN_SIZE, MAX_WIDTH)
-        height = self._clamp_size(self.settings.get(prefix + "height", DEFAULT_HEIGHT), MIN_SIZE, MAX_HEIGHT)
-        position = self.settings.get(prefix + "position", "bottom-right")
-
-        if position not in POSITION_ALIGN:
-            position = "bottom-right"
-
-        # Gtk.Overlay has exactly ONE main child (set via set_child), which it
-        # measures and allocates to fill. Overlay layers go on top via
-        # add_overlay(). We must not add the content with add_overlay(), or the
-        # overlay ends up with no main child and collapses to 0x0.
-        children = list(self._iter_children(Gtk, state["content"]))
-
-        if not children:
-            self.log("(%s): container has no children to wrap.", (pane["label"],))
-            return
-
-        if len(children) > 1:
+        if len(children) != 1:
             self.log("(%s): container has %d children (expected 1); skipping wrap.", (pane["label"], len(children)))
             return
 
@@ -413,7 +415,7 @@ class Plugin(BasePlugin):
 
         overlay = Gtk.Overlay(visible=True)
 
-        # Preserve the content's effective expansion inside the container.
+        # Preserve the content's expansion inside the container.
         overlay.set_halign(main_child.get_halign())
         overlay.set_valign(main_child.get_valign())
 
@@ -427,38 +429,24 @@ class Plugin(BasePlugin):
             pass
 
         try:
-            state["content"].remove(main_child)
+            content.remove(main_child)
         except Exception:
             self.log("(%s): could not remove content from its container.", (pane["label"],))
             return
 
         overlay.set_child(main_child)
 
-        # The doll goes on TOP. Gtk.Picture/Gtk.Box install no event controllers
-        # and are not input targets by default, so clicks pass through.
-        doll_box = Gtk.Box(hexpand=True, vexpand=True, visible=True)
-        doll_box.set_halign(Gtk.Align.FILL)
-        doll_box.set_valign(Gtk.Align.FILL)
+        # The doll goes ON TOP. Gtk.Picture installs no event controllers and is
+        # not an input target by default, so clicks pass through to the chat.
+        doll = self._make_picture(gtk, path, width, height)
+        self._align_doll(Gtk, doll, position)
+        overlay.add_overlay(doll)
 
-        doll = self._make_picture(gtk, path, width, height, state)
-
-        halign_name, valign_name = POSITION_ALIGN[position]
-        doll.set_halign(getattr(Gtk.Align, halign_name))
-        doll.set_valign(getattr(Gtk.Align, valign_name))
-        doll.set_margin_start(DOLL_MARGIN)
-        doll.set_margin_end(DOLL_MARGIN)
-        doll.set_margin_top(DOLL_MARGIN)
-        doll.set_margin_bottom(DOLL_MARGIN)
-
-        doll_box.append(doll)
-        overlay.add_overlay(doll_box)
-
-        state["content"].append(overlay)
+        content.append(overlay)
 
         state["overlay"] = overlay
-        state["mount_parent"] = state["content"]
+        state["mount_parent"] = content
         state["main_child"] = main_child
-        state["doll_box"] = doll_box
         state["doll"] = doll
 
         self.log("(%s) shown (%dx%d, %s).", (pane["label"], width, height, position))
@@ -467,28 +455,25 @@ class Plugin(BasePlugin):
 
         state = self._panes[pane["key"]]
 
-        self._stop_gif(state)
-
         overlay = state["overlay"]
         content = state["content"]
-        doll_box = state["doll_box"]
+        doll = state["doll"]
         main_child = state["main_child"]
 
         state["overlay"] = None
         state["content"] = None
         state["mount_parent"] = None
-        state["doll_box"] = None
         state["doll"] = None
         state["main_child"] = None
 
         if overlay is None or content is None:
             return
 
-        # 1. Detach the doll layer (unparent, do not destroy).
-        if doll_box is not None:
+        # 1. Detach the doll layer.
+        if doll is not None:
             try:
-                if doll_box.get_parent() is overlay:
-                    overlay.remove_overlay(doll_box)
+                if doll.get_parent() is overlay:
+                    overlay.remove_overlay(doll)
             except Exception:
                 pass
 
@@ -512,7 +497,7 @@ class Plugin(BasePlugin):
             pass
 
         # 4. Restore the content as the container's child.
-        if main_child is not None:
+        if main_child is not None and main_child.get_parent() is None:
             try:
                 content.append(main_child)
             except Exception:
@@ -523,7 +508,6 @@ class Plugin(BasePlugin):
 
         Gtk = gtk["Gtk"]
         state = self._panes[pane["key"]]
-        prefix = pane["prefix"]
 
         self._teardown_behind_text(pane, gtk)
 
@@ -539,31 +523,12 @@ class Plugin(BasePlugin):
             self.log("Requires GTK 4. GTK 3 is a no-op.")
             return
 
-        if not self.settings.get(prefix + "enabled", True):
+        resolved = self._resolve(pane)
+
+        if resolved is None:
             return
 
-        path = self._clean_path(self.settings.get(prefix + "image_path", ""))
-
-        if not path:
-            self.log("(%s): no image set. Use /pagedoll settings.", (pane["label"],))
-            return
-
-        if not os.path.isfile(path):
-            self.log("(%s): image not found: %s", (pane["label"], path))
-            return
-
-        extension = os.path.splitext(path)[1].lower()
-
-        if extension not in ALLOWED_EXTENSIONS:
-            self.log("(%s): unsupported image type %s (use .png or .gif)", (pane["label"], extension))
-            return
-
-        width = self._clamp_size(self.settings.get(prefix + "width", DEFAULT_WIDTH), MIN_SIZE, MAX_WIDTH)
-        height = self._clamp_size(self.settings.get(prefix + "height", DEFAULT_HEIGHT), MIN_SIZE, MAX_HEIGHT)
-        position = self.settings.get(prefix + "position", "bottom-right")
-
-        if position not in POSITION_ALIGN:
-            position = "bottom-right"
+        path, width, height, position = resolved
 
         tree_parent = tree_container.get_parent()
 
@@ -580,25 +545,15 @@ class Plugin(BasePlugin):
 
         overlay = Gtk.Overlay(visible=True)
 
-        # The doll is the overlay's MAIN child (drawn first, at the bottom), so
-        # it sits BEHIND the tree. The tree is an overlay layer on top, so the
-        # list text stays readable above the doll.
-        doll_box = Gtk.Box(hexpand=True, vexpand=True, visible=True)
-        doll_box.set_halign(Gtk.Align.FILL)
-        doll_box.set_valign(Gtk.Align.FILL)
+        # Layering (bottom to top): transparent fill -> doll -> tree.
+        # The doll is an overlay layer BEHIND the tree, and the tree is made
+        # transparent via CSS so the doll shows through behind the text.
+        fill = Gtk.Box(hexpand=True, vexpand=True, visible=True)
+        overlay.set_child(fill)
 
-        doll = self._make_picture(gtk, path, width, height, state)
-
-        halign_name, valign_name = POSITION_ALIGN[position]
-        doll.set_halign(getattr(Gtk.Align, halign_name))
-        doll.set_valign(getattr(Gtk.Align, valign_name))
-        doll.set_margin_start(DOLL_MARGIN)
-        doll.set_margin_end(DOLL_MARGIN)
-        doll.set_margin_top(DOLL_MARGIN)
-        doll.set_margin_bottom(DOLL_MARGIN)
-
-        doll_box.append(doll)
-        overlay.set_child(doll_box)
+        doll = self._make_picture(gtk, path, width, height)
+        self._align_doll(Gtk, doll, position)
+        overlay.add_overlay(doll)
 
         # Preserve the tree's expansion inside its parent box.
         overlay.set_halign(tree_container.get_halign())
@@ -628,16 +583,15 @@ class Plugin(BasePlugin):
 
         # Make the tree area transparent so the doll shows through behind the text.
         self._ensure_css(gtk)
-        tree_container.add_css_class(DOWNLOADS_CSS_CLASS)
+        tree_container.add_css_class(CSS_CLASS_DOWNLOADS)
 
         if tree is not None:
-            tree.add_css_class(DOWNLOADS_CSS_CLASS)
+            tree.add_css_class(CSS_CLASS_DOWNLOADS)
 
         state["overlay"] = overlay
         state["mount_parent"] = tree_parent
         state["main_child"] = tree_container
         state["tree"] = tree
-        state["doll_box"] = doll_box
         state["doll"] = doll
 
         self.log("(%s) shown behind text (%dx%d, %s).", (pane["label"], width, height, position))
@@ -646,17 +600,15 @@ class Plugin(BasePlugin):
 
         state = self._panes[pane["key"]]
 
-        self._stop_gif(state)
-
         overlay = state["overlay"]
         tree_container = state["main_child"]
         tree_parent = state["mount_parent"]
         tree = state["tree"]
+        doll = state["doll"]
 
         state["overlay"] = None
         state["content"] = None
         state["mount_parent"] = None
-        state["doll_box"] = None
         state["doll"] = None
         state["main_child"] = None
         state["tree"] = None
@@ -664,42 +616,50 @@ class Plugin(BasePlugin):
         if overlay is None or tree_container is None or tree_parent is None:
             return
 
-        # 1. Detach the tree from the overlay.
+        # 1. Detach the doll layer.
+        if doll is not None:
+            try:
+                if doll.get_parent() is overlay:
+                    overlay.remove_overlay(doll)
+            except Exception:
+                pass
+
+        # 2. Detach the tree from the overlay.
         try:
             if tree_container.get_parent() is overlay:
                 overlay.remove_overlay(tree_container)
         except Exception:
             pass
 
-        # 2. Detach the doll (main child).
+        # 3. Detach the fill box (main child).
         try:
             overlay.set_child(None)
         except Exception:
             pass
 
-        # 3. Remove the empty overlay from the tree's parent box.
+        # 4. Remove the empty overlay from the tree's parent box.
         try:
             if overlay.get_parent() is tree_parent:
                 tree_parent.remove(overlay)
         except Exception:
             pass
 
-        # 4. Restore the tree as the box's child.
-        try:
-            if tree_container.get_parent() is None:
+        # 5. Restore the tree as the box's child.
+        if tree_container.get_parent() is None:
+            try:
                 tree_parent.append(tree_container)
-        except Exception:
-            self.log("(%s): failed to restore the downloads tree.", (pane["label"],))
+            except Exception:
+                self.log("(%s): failed to restore the downloads tree.", (pane["label"],))
 
-        # 5. Remove the transparency class.
+        # 6. Remove the transparency class.
         try:
-            tree_container.remove_css_class(DOWNLOADS_CSS_CLASS)
+            tree_container.remove_css_class(CSS_CLASS_DOWNLOADS)
         except Exception:
             pass
 
         if tree is not None:
             try:
-                tree.remove_css_class(DOWNLOADS_CSS_CLASS)
+                tree.remove_css_class(CSS_CLASS_DOWNLOADS)
             except Exception:
                 pass
 
@@ -728,144 +688,44 @@ class Plugin(BasePlugin):
 
     # --- image rendering -------------------------------------------------------
 
-    def _make_picture(self, gtk, path, width, height, state):
+    def _make_picture(self, gtk, path, width, height):
 
         Gtk = gtk["Gtk"]
         Gdk = gtk["Gdk"]
         GdkPixbuf = gtk["GdkPixbuf"]
 
-        picture = Gtk.Picture(visible=True)
-        picture.set_can_shrink(True)
+        picture = Gtk.Picture(visible=True, can_shrink=True)
         picture.set_size_request(width, height)
 
-        state["gif_size"] = (width, height)
+        # GdkPixbuf accepts a plain file path (Gdk.Texture.new_from_file
+        # expects a Gio.File), and scaling here pins the doll to the exact
+        # configured size instead of the image's native resolution.
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+        except Exception as exc:
+            self.log("Could not load image: %s", (exc,))
+            return picture
 
-        extension = os.path.splitext(path)[1].lower()
+        if pixbuf is None:
+            self.log("Could not load image (unsupported or corrupt): %s", (path,))
+            return picture
 
-        if extension == ".gif":
-            try:
-                animation = GdkPixbuf.PixbufAnimation.new_from_file(path)
-                self._start_gif(picture, animation, state)
-            except Exception as exc:
-                self.log("Could not load GIF: %s", (exc,))
-        else:
-            # GdkPixbuf accepts a plain file path (Gdk.Texture.new_from_file
-            # expects a Gio.File), and scaling here pins the doll to the exact
-            # configured size instead of the image's native resolution.
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+        if pixbuf.get_width() != width or pixbuf.get_height() != height:
+            pixbuf = pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
 
-                if pixbuf is None:
-                    self.log("Could not load image (unsupported or corrupt): %s", (path,))
-                else:
-                    pixbuf = self._scale_pixbuf(pixbuf, width, height, GdkPixbuf)
-                    texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-                    picture.set_paintable(texture)
-            except Exception as exc:
-                self.log("Could not load image: %s", (exc,))
-
+        picture.set_paintable(Gdk.Texture.new_for_pixbuf(pixbuf))
         return picture
 
     @staticmethod
-    def _scale_pixbuf(pixbuf, width, height, GdkPixbuf):
-        if pixbuf.get_width() == width and pixbuf.get_height() == height:
-            return pixbuf
+    def _align_doll(Gtk, doll, position):
 
-        return pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
-
-    def _start_gif(self, picture, animation, state):
-
-        gtk = self._get_gtk()
-
-        if not gtk:
-            return
-
-        GLib = gtk["GLib"]
-
-        state["gif_picture"] = picture
-
-        try:
-            state["gif_iter"] = animation.get_iter(None)
-        except Exception as exc:
-            state["gif_iter"] = None
-            self.log("GIF animation not started: %s", (exc,))
-            return
-
-        self._gif_show_frame(state)
-        state["gif_timeout"] = GLib.timeout_add(self._gif_delay(state), self._gif_tick, state)
-
-    def _gif_tick(self, state):
-
-        if self._gtk is None or state["gif_iter"] is None:
-            return False
-
-        GLib = self._gtk["GLib"]
-
-        try:
-            try:
-                state["gif_iter"].advance()
-            except TypeError:
-                state["gif_iter"].advance(GLib.get_real_time() // 1000)
-
-            self._gif_show_frame(state)
-            delay = self._gif_delay(state)
-        except Exception as exc:
-            self.log("GIF animation stopped: %s", (exc,))
-            return False
-
-        state["gif_timeout"] = GLib.timeout_add(delay, self._gif_tick, state)
-        return False
-
-    def _gif_show_frame(self, state):
-
-        if self._gtk is None or state["gif_iter"] is None:
-            return
-
-        pixbuf = state["gif_iter"].get_pixbuf()
-        picture = state["gif_picture"]
-
-        if pixbuf is not None and picture is not None:
-            Gdk = self._gtk["Gdk"]
-            GdkPixbuf = self._gtk["GdkPixbuf"]
-
-            gif_size = state.get("gif_size")
-
-            if gif_size:
-                width, height = gif_size
-
-                if pixbuf.get_width() != width or pixbuf.get_height() != height:
-                    pixbuf = pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
-
-            texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-            picture.set_paintable(texture)
-            picture.queue_draw()
-
-    def _gif_delay(self, state):
-
-        delay = state["gif_iter"].get_delay_time()
-
-        if not delay or delay < 10:
-            return 100
-
-        return delay
-
-    def _stop_gif(self, state):
-
-        if state["gif_timeout"] is not None and self._gtk:
-            try:
-                self._gtk["GLib"].source_remove(state["gif_timeout"])
-            except Exception:
-                pass
-
-        if state["gif_picture"] is not None:
-            try:
-                state["gif_picture"].set_paintable(None)
-            except Exception:
-                pass
-
-        state["gif_timeout"] = None
-        state["gif_iter"] = None
-        state["gif_picture"] = None
+        halign_name, valign_name = POSITIONS[position]
+        doll.set_halign(getattr(Gtk.Align, halign_name))
+        doll.set_valign(getattr(Gtk.Align, valign_name))
+        doll.set_margin_start(DOLL_MARGIN)
+        doll.set_margin_end(DOLL_MARGIN)
+        doll.set_margin_top(DOLL_MARGIN)
+        doll.set_margin_bottom(DOLL_MARGIN)
 
     # --- css ---------------------------------------------------------------------
 
@@ -881,19 +741,19 @@ class Plugin(BasePlugin):
             provider = Gtk.CssProvider()
             css = (
                 "treeview.%s, scrolledwindow.%s { background-color: transparent; }"
-                % (DOWNLOADS_CSS_CLASS, DOWNLOADS_CSS_CLASS)
+                % (CSS_CLASS_DOWNLOADS, CSS_CLASS_DOWNLOADS)
             )
             provider.load_from_data(css.encode("utf-8"))
 
             display = Gdk.Display.get_default()
 
             if display is not None:
-                priority = getattr(Gtk, "STYLE_PROVIDER_PRIORITY_APPLICATION", 600)
+                priority = getattr(Gtk, "STYLE_PROVIDER_PRIORITY_USER", 800)
                 Gtk.StyleContext.add_provider_for_display(display, provider, priority)
 
             self._css_provider = provider
         except Exception as exc:
-            self.log("could not install downloads CSS: %s", (exc,))
+            self.log("Could not install downloads CSS: %s", (exc,))
 
     # --- settings window ---------------------------------------------------------
 
@@ -918,7 +778,7 @@ class Plugin(BasePlugin):
             except Exception:
                 self._settings_window = None
 
-        self._build_settings_window(Gtk)
+        self._build_settings_window(gtk)
 
         try:
             self._settings_window.present()
@@ -927,14 +787,25 @@ class Plugin(BasePlugin):
 
     def _close_settings_window(self):
 
+        if self._live_timeout is not None and self._gtk:
+            try:
+                self._gtk["GLib"].source_remove(self._live_timeout)
+            except Exception:
+                pass
+
+        self._live_timeout = None
+
         if self._settings_window is not None:
             try:
                 self._settings_window.destroy()
             except Exception:
                 pass
 
-            self._settings_window = None
+        self._settings_window = None
+        self._ui = {}
 
+    def _on_settings_destroyed(self, *_args):
+        self._settings_window = None
         self._ui = {}
 
     def _big_title(self, Gtk, text):
@@ -945,11 +816,22 @@ class Plugin(BasePlugin):
         label.set_margin_bottom(6)
         return label
 
-    def _build_settings_window(self, Gtk):
+    def _build_settings_window(self, gtk):
+
+        Gtk = gtk["Gtk"]
+        self._applying = True
+
+        try:
+            self._build_settings_window_inner(Gtk)
+        finally:
+            self._applying = False
+
+    def _build_settings_window_inner(self, Gtk):
 
         window = Gtk.Window(title="Page Doll Settings")
         window.set_default_size(540, 520)
         window.set_resizable(True)
+        window.connect("destroy", self._on_settings_destroyed)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, visible=True)
         box.set_margin_start(16)
@@ -958,6 +840,7 @@ class Plugin(BasePlugin):
         box.set_margin_bottom(12)
 
         box.append(self._big_title(Gtk, "Page Doll"))
+        box.append(Gtk.Label(label="Changes apply immediately.", xalign=0.0, visible=True))
 
         for pane in PANES:
             prefix = pane["prefix"]
@@ -967,28 +850,33 @@ class Plugin(BasePlugin):
 
             ui["enabled"] = Gtk.Switch(active=bool(self.settings.get(prefix + "enabled", True)), visible=True)
             ui["enabled"].set_halign(Gtk.Align.START)
+            ui["enabled"].connect("notify::active", self._on_live_change)
             box.append(self._row(Gtk, "Enabled", ui["enabled"]))
 
             ui["path"] = Gtk.Entry(visible=True, hexpand=True)
             ui["path"].set_text(self.settings.get(prefix + "image_path", ""))
+            ui["path"].connect("changed", self._on_live_change)
             browse = Gtk.Button(label="Browse…", visible=True)
             browse.connect("clicked", self._on_browse, pane["key"])
             path_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, visible=True)
             path_row.append(ui["path"])
             path_row.append(browse)
-            box.append(self._row(Gtk, "Image (.png / .gif)", path_row))
+            box.append(self._row(Gtk, "Image (.png)", path_row))
 
             ui["width"] = self._make_spin(
-                Gtk, self._clamp_size(self.settings.get(prefix + "width", DEFAULT_WIDTH), MIN_SIZE, MAX_WIDTH), MAX_WIDTH
+                Gtk, self._clamp_size(self.settings.get(prefix + "width", DEFAULT_WIDTH), MIN_SIZE, MAX_SIZE), MAX_SIZE
             )
+            ui["width"].connect("value-changed", self._on_live_change)
             box.append(self._row(Gtk, "Width (px)", ui["width"]))
 
             ui["height"] = self._make_spin(
-                Gtk, self._clamp_size(self.settings.get(prefix + "height", DEFAULT_HEIGHT), MIN_SIZE, MAX_HEIGHT), MAX_HEIGHT
+                Gtk, self._clamp_size(self.settings.get(prefix + "height", DEFAULT_HEIGHT), MIN_SIZE, MAX_SIZE), MAX_SIZE
             )
+            ui["height"].connect("value-changed", self._on_live_change)
             box.append(self._row(Gtk, "Height (px)", ui["height"]))
 
             ui["position"] = Gtk.DropDown(visible=True)
+            ui["position"].connect("notify::selected", self._on_live_change)
             box.append(self._row(Gtk, "Position", ui["position"]))
 
         for pane in PANES:
@@ -998,13 +886,8 @@ class Plugin(BasePlugin):
         button_row.set_halign(Gtk.Align.END)
         button_row.set_margin_top(12)
 
-        apply_button = Gtk.Button(label="Apply", visible=True)
-        apply_button.connect("clicked", self._on_apply)
-
         close_button = Gtk.Button(label="Close", visible=True)
         close_button.connect("clicked", lambda *a: self._close_settings_window())
-
-        button_row.append(apply_button)
         button_row.append(close_button)
         box.append(button_row)
 
@@ -1048,7 +931,7 @@ class Plugin(BasePlugin):
             return
 
         pane = self._pane_by_key(pane_key)
-        options = list(POSITION_ALIGN.keys())
+        options = list(POSITIONS.keys())
         current = self.settings.get(pane["prefix"] + "position", "bottom-right")
 
         if current not in options:
@@ -1086,9 +969,8 @@ class Plugin(BasePlugin):
         )
 
         file_filter = Gtk.FileFilter()
-        file_filter.set_name("Page doll images (PNG, GIF)")
+        file_filter.set_name("PNG images")
         file_filter.add_mime_type("image/png")
-        file_filter.add_mime_type("image/gif")
         chooser.add_filter(file_filter)
 
         chooser.set_transient_for(self._settings_window)
@@ -1110,11 +992,55 @@ class Plugin(BasePlugin):
         chooser.connect("response", on_response)
         chooser.show()
 
-    def _on_apply(self, _button):
+    # --- live apply --------------------------------------------------------------
+
+    def _on_live_change(self, *_args):
+
+        if self._applying:
+            return
+
+        self._schedule_live_apply()
+
+    def _schedule_live_apply(self):
+
+        gtk = self._get_gtk()
+
+        if not gtk:
+            return
+
+        GLib = gtk["GLib"]
+
+        if self._live_timeout is not None:
+            try:
+                GLib.source_remove(self._live_timeout)
+            except Exception:
+                pass
+
+        self._live_timeout = GLib.timeout_add(LIVE_APPLY_DELAY_MS, self._live_apply)
+
+    def _live_apply(self):
+
+        self._live_timeout = None
+        self._read_settings_from_ui()
+
+        gtk = self._get_gtk()
+
+        if gtk:
+            self._refresh_all(gtk)
+
+        return False
+
+    def _read_settings_from_ui(self):
 
         for pane in PANES:
             prefix = pane["prefix"]
             ui = self._ui.get(pane["key"], {})
+
+            if not ui:
+                continue
+
+            if ui.get("enabled") is not None:
+                self.settings[prefix + "enabled"] = ui["enabled"].get_active()
 
             if ui.get("path") is not None:
                 self.settings[prefix + "image_path"] = ui["path"].get_text().strip()
@@ -1126,36 +1052,23 @@ class Plugin(BasePlugin):
                 self.settings[prefix + "height"] = int(ui["height"].get_value())
 
             if ui.get("position") is not None:
-                options = list(POSITION_ALIGN.keys())
+                options = list(POSITIONS.keys())
                 selected = ui["position"].get_selected()
 
                 if 0 <= selected < len(options):
                     self.settings[prefix + "position"] = options[selected]
 
-            if ui.get("enabled") is not None:
-                self.settings[prefix + "enabled"] = ui["enabled"].get_active()
-
-        gtk = self._get_gtk()
-
-        if gtk:
-            self._refresh_all(gtk)
-
-        self.output("Page doll settings applied.")
-
     # --- command -----------------------------------------------------------------
 
-    def pagedoll_command(self, args):
+    def pagedoll_command(self, args, room=None, user=None):
 
-        action = (args.lstrip() or "settings").strip().lower()
+        action = (args or "").lstrip().strip().lower()
         parts = action.split()
 
         pane_key = None
 
         if parts and parts[0] == "downloads":
             pane_key = "downloads"
-            parts = parts[1:]
-        elif parts and parts[0] in {"chat", "private", "privatechat"}:
-            pane_key = "chat"
             parts = parts[1:]
 
         sub = parts[0] if parts else "settings"
@@ -1181,7 +1094,7 @@ class Plugin(BasePlugin):
             self._set_enabled(pane_key or "chat", False)
             return True
 
-        self.output("Usage: /pagedoll [settings|on|off|refresh] | /pagedoll downloads [on|off|settings]")
+        self.output("Usage: /pagedoll [settings|on|off|refresh] | /pagedoll downloads [on|off]")
         return True
 
     def _set_enabled(self, pane_key, value):

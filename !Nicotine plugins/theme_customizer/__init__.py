@@ -3,9 +3,9 @@
 Adds a settings menu (Edit -> Plugins -> Theme Customizer -> Settings) that
 lets the user customize the theme:
 
-    * Background type: image (static picture), color (solid fill) or gif
-      (animated, GTK 4 only).
-    * Placement modes for image/gif backgrounds: fit, fill, tile.
+    * A background image or animated GIF (type is detected automatically), or
+      a solid background color when no image is set.
+    * Placement modes for image/GIF backgrounds: fit, fill, tile.
     * A colored overlay with adjustable opacity, so the background stays
       readable behind the sidebar, chat, log pane and header/search bar.
 
@@ -17,6 +17,7 @@ background layer and therefore require GTK 4.
 import colorsys
 import json
 import os
+import random
 from pathlib import Path
 
 from pynicotine.pluginsystem import BasePlugin
@@ -25,7 +26,6 @@ from pynicotine.pluginsystem import BasePlugin
 CSS_CLASS_BG = "nplus-theme-background"
 CSS_CLASS_TRANSPARENT = "nplus-theme-background-transparent"
 CSS_CLASS_OVERLAY = "nplus-theme-background-overlay"
-CSS_CLASS_IMAGE_OVERLAY = "nplus-theme-image-overlay"
 CSS_CLASS_HEADER = "nplus-theme-header-overlay"
 CSS_CLASS_FILTER = "nplus-theme-ui-filter"
 TEXT_OUTLINE_SELECTOR = (
@@ -38,8 +38,6 @@ POLL_INTERVAL_MS = 1000
 DEFAULT_COLOR = "#1a1a2e"
 DEFAULT_OVERLAY_COLOR = "#000000"
 DEFAULT_OVERLAY_OPACITY = 0.45
-DEFAULT_IMAGE_OVERLAY_COLOR = "#000000"
-DEFAULT_IMAGE_OVERLAY_OPACITY = 0.45
 DEFAULT_OVERLAY_IMAGE_OPACITY = 1.0
 DEFAULT_HEADER_OVERLAY_OPACITY = 0.6
 DEFAULT_HEADER_COLOR = "#1b1b1b"
@@ -54,20 +52,9 @@ FIND_SWEEP_CHUNK = 1
 FIND_SWEEP_MAX_CHUNKS = 4096
 SWATCH_CLASS = "nplus-find-highlight-swatch"
 DEFAULT_ACCENT_COLOR = "#5B3368"
+DEFAULT_FINDBAR_COLOR = "#1b1b1b"
 DEFAULT_BACKGROUND_EFFECT = "none"
 DEFAULT_EFFECT_STRENGTH = 50
-DEFAULT_USERLIST_WIDTH = 180
-DEFAULT_BUDDY_WIDTH = 200
-BUDDY_MIN_WIDTH = 50
-BUDDY_MAX_WIDTH = 1200
-
-# End-child container ids of Nicotine+'s two native buddy-list panes (loaded
-# from ui/mainwindow.ui). Used to tell the buddy-list containers apart from the
-# per-room member list and any third-party panes.
-BUDDY_LIST_END_IDS = {"buddy_list_container", "chatrooms_buddy_list_container"}
-
-# Gtk.Builder id of the per-room member list (ui/chatrooms.ui).
-USERLIST_CONTAINER_ID = "users_container"
 
 # Nicotine+ font config keys mapped to their GTK CSS selectors (mirrors
 # pynicotine/gtkgui/widgets/theme.py -> _get_custom_font_css).
@@ -130,8 +117,6 @@ class Plugin(BasePlugin):
             "mode": "fill",
             "overlay_color": DEFAULT_OVERLAY_COLOR,
             "overlay_opacity": DEFAULT_OVERLAY_OPACITY,
-            "image_overlay_color": DEFAULT_IMAGE_OVERLAY_COLOR,
-            "image_overlay_opacity": DEFAULT_IMAGE_OVERLAY_OPACITY,
             "overlay_image_opacity": DEFAULT_OVERLAY_IMAGE_OPACITY,
             "header_overlay_opacity": DEFAULT_HEADER_OVERLAY_OPACITY,
             "header_transparent": False,
@@ -142,15 +127,11 @@ class Plugin(BasePlugin):
             "text_outline_size": DEFAULT_TEXT_OUTLINE_SIZE,
             "overlay_radius": DEFAULT_OVERLAY_RADIUS,
             "accent_color": DEFAULT_ACCENT_COLOR,
+            "findbar_color": DEFAULT_FINDBAR_COLOR,
             "background_effect": DEFAULT_BACKGROUND_EFFECT,
             "effect_strength": DEFAULT_EFFECT_STRENGTH,
             "overlay_image_path": "",
             "header_image_path": "",
-            "userlist_width": DEFAULT_USERLIST_WIDTH,
-            "userlist_resizable": False,
-            "userlist_hidden": False,
-            "buddy_width": DEFAULT_BUDDY_WIDTH,
-            "buddy_hidden": False,
             "find_enabled": True,
             "find_style": "solid",
             "find_color": DEFAULT_FIND_COLOR,
@@ -163,18 +144,13 @@ class Plugin(BasePlugin):
                 "description": "Enable custom background",
                 "type": "bool",
             },
-            "background_type": {
-                "description": "Background type",
-                "type": "dropdown",
-                "options": ["image", "color", "gif", "webm"],
-            },
             "image_path": {
-                "description": "Background image (image/gif)",
+                "description": "Background image / GIF (type auto-detected)",
                 "type": "file",
                 "chooser": "image",
             },
             "color": {
-                "description": "Background color (color type, #RRGGBB)",
+                "description": "Background color (solid, used when no image is set, #RRGGBB)",
                 "type": "str",
             },
             "mode": {
@@ -188,17 +164,6 @@ class Plugin(BasePlugin):
             },
             "overlay_opacity": {
                 "description": "Text tint opacity - readability overlay under text (0 = none, 1 = solid)",
-                "type": "float",
-                "minimum": 0.0,
-                "maximum": 1.0,
-                "stepsize": 0.05,
-            },
-            "image_overlay_color": {
-                "description": "Image darkening color - tint drawn over the background image (#RRGGBB)",
-                "type": "str",
-            },
-            "image_overlay_opacity": {
-                "description": "Image darkening opacity - darkens the background image (0 = none, 1 = solid)",
                 "type": "float",
                 "minimum": 0.0,
                 "maximum": 1.0,
@@ -254,10 +219,14 @@ class Plugin(BasePlugin):
                 "description": "Accent color (selections, switches, links, buttons)",
                 "type": "str",
             },
+            "findbar_color": {
+                "description": "Find bar (Ctrl+F search bar) background color (#RRGGBB)",
+                "type": "str",
+            },
             "background_effect": {
-                "description": "Background effect (none/blur/grayscale/sepia/saturate/hue-rotate/invert)",
+                "description": "Background effect (none/grayscale/sepia/saturate/hue-rotate/invert)",
                 "type": "dropdown",
-                "options": ["none", "blur", "grayscale", "sepia", "saturate", "hue-rotate", "invert"],
+                "options": ["none", "grayscale", "sepia", "saturate", "hue-rotate", "invert"],
             },
             "effect_strength": {
                 "description": "Effect strength as a percentage (applies to the selected background effect)",
@@ -274,30 +243,6 @@ class Plugin(BasePlugin):
                 "description": "Title bar background image",
                 "type": "file",
                 "chooser": "image",
-            },
-            "userlist_width": {
-                "description": "Room user list width in pixels (in development)",
-                "type": "integer",
-                "minimum": 120,
-                "maximum": 400,
-            },
-            "userlist_resizable": {
-                "description": "Make the room user list drag-resizable (experimental, in development)",
-                "type": "bool",
-            },
-            "userlist_hidden": {
-                "description": "Completely hide the room user list (in development)",
-                "type": "bool",
-            },
-            "buddy_width": {
-                "description": "Buddy list width in pixels - moves the native divider (in development)",
-                "type": "integer",
-                "minimum": BUDDY_MIN_WIDTH,
-                "maximum": BUDDY_MAX_WIDTH,
-            },
-            "buddy_hidden": {
-                "description": "Hide the buddy-list sidebar (in development)",
-                "type": "bool",
             },
             "find_enabled": {
                 "description": "Enable find highlighting",
@@ -334,18 +279,6 @@ class Plugin(BasePlugin):
                 "parameters": ["[on|off|refresh|settings|unload|presets]"],
                 "group": "Theme Customizer",
             },
-            "userlist": {
-                "callback": self.userlist_command,
-                "description": "Hide/show the buddy list or room user list, or open their settings",
-                "parameters": ["[settings|hide-buddy|show-buddy|hide-users|show-users]"],
-                "group": "Theme Customizer",
-            },
-            "cul": {
-                "callback": self.userlist_command,
-                "description": "Short alias for /userlist",
-                "parameters": ["[settings|hide-buddy|show-buddy|hide-users|show-users]"],
-                "group": "Theme Customizer",
-            },
         }
 
         self._gtk = None           # cached dict of gi modules, or False when unavailable
@@ -371,8 +304,6 @@ class Plugin(BasePlugin):
         self._chooser_key = "image_path"
         self._applying = False
         self._live_timeout = None
-        self._applied_buddy_width = set()
-        self._last_buddy_signature = None
 
         # find-highlight state
         self._find_patched = False
@@ -413,7 +344,6 @@ class Plugin(BasePlugin):
 
         self._find_unpatch()
         self._find_unpatch_context_menu()
-        self._restore_userlists()
         self._clear_theme()
 
     # --- command -------------------------------------------------------------
@@ -462,8 +392,6 @@ class Plugin(BasePlugin):
             self.settings.get("mode", "fill") or "fill",
             self.settings.get("overlay_color", DEFAULT_OVERLAY_COLOR) or "",
             float(self.settings.get("overlay_opacity", DEFAULT_OVERLAY_OPACITY) or 0.0),
-            self.settings.get("image_overlay_color", DEFAULT_IMAGE_OVERLAY_COLOR) or "",
-            float(self.settings.get("image_overlay_opacity", DEFAULT_IMAGE_OVERLAY_OPACITY) or 0.0),
             float(self.settings.get("overlay_image_opacity", DEFAULT_OVERLAY_IMAGE_OPACITY) or 0.0),
             float(self.settings.get("header_overlay_opacity", DEFAULT_HEADER_OVERLAY_OPACITY) or 0.0),
             self.settings.get("accent_color", DEFAULT_ACCENT_COLOR) or "",
@@ -471,11 +399,6 @@ class Plugin(BasePlugin):
             int(self.settings.get("effect_strength", DEFAULT_EFFECT_STRENGTH) or 0),
             self.settings.get("overlay_image_path", "") or "",
             self.settings.get("header_image_path", "") or "",
-            int(self.settings.get("userlist_width", DEFAULT_USERLIST_WIDTH) or 0),
-            bool(self.settings.get("userlist_resizable", False)),
-            bool(self.settings.get("userlist_hidden", False)),
-            int(self.settings.get("buddy_width", DEFAULT_BUDDY_WIDTH) or 0),
-            bool(self.settings.get("buddy_hidden", False)),
         )
 
     def _poll_settings(self):
@@ -505,8 +428,6 @@ class Plugin(BasePlugin):
 
         self._tag_assets(gtk)
         self._tag_header(gtk)
-        self._apply_userlist_width(gtk)
-        self._apply_buddy_list(gtk)
 
     # --- GTK access ----------------------------------------------------------
 
@@ -537,6 +458,20 @@ class Plugin(BasePlugin):
 
     # --- theme application ----------------------------------------------------
 
+    @staticmethod
+    def _detect_background_type(image_path):
+        """Infer the background type from the selected file (no user dropdown)."""
+
+        image_path = (image_path or "").strip()
+
+        if not image_path:
+            return "color"
+
+        if image_path.lower().endswith(".gif"):
+            return "gif"
+
+        return "image"
+
     def _apply_theme(self):
 
         self._unloaded = False
@@ -552,14 +487,14 @@ class Plugin(BasePlugin):
         signature = self._current_signature()
 
         enabled = bool(self.settings.get("enabled", True))
-        background_type = self.settings.get("background_type", "image") or "image"
         image_path = self._clean_path(self.settings.get("image_path", ""))
+        background_type = self._detect_background_type(image_path)
 
         if not enabled:
             self._signature = signature
             return True
 
-        if background_type in {"image", "gif", "webm"}:
+        if background_type in {"image", "gif"}:
             if not image_path:
                 self._signature = signature
                 return True
@@ -580,15 +515,6 @@ class Plugin(BasePlugin):
 
         self._window = window
         self._root = self._get_root(window)
-
-        # Auto-detect animated media selected while the type is still "image".
-        if background_type == "image" and image_path:
-            lower = image_path.lower()
-
-            if lower.endswith(".gif"):
-                background_type = "gif"
-            elif lower.endswith((".webm", ".mp4", ".ogv", ".mkv")):
-                background_type = "webm"
 
         config = self._build_config()
         config["type"] = background_type
@@ -612,18 +538,6 @@ class Plugin(BasePlugin):
 
         self._tag_assets(gtk)
         self._tag_header(gtk)
-        self._apply_userlist_width(gtk)
-
-        buddy_signature = (
-            int(self.settings.get("buddy_width", DEFAULT_BUDDY_WIDTH) or 0),
-            bool(self.settings.get("buddy_hidden", False)),
-        )
-
-        if buddy_signature != self._last_buddy_signature:
-            self._applied_buddy_width = set()
-            self._last_buddy_signature = buddy_signature
-
-        self._apply_buddy_list(gtk)
 
         # Force a repaint so CSS background/image/overlay changes show up
         # immediately. Static backgrounds (image/color) don't repaint on their
@@ -648,14 +562,12 @@ class Plugin(BasePlugin):
 
     def _build_config(self):
 
-        background_type = self.settings.get("background_type", "image") or "image"
         image_path = self._clean_path(self.settings.get("image_path", ""))
+        background_type = self._detect_background_type(image_path)
         color = self.settings.get("color", DEFAULT_COLOR) or ""
         mode = self.settings.get("mode", "fill") or "fill"
         overlay_color = self.settings.get("overlay_color", DEFAULT_OVERLAY_COLOR) or ""
         overlay_opacity = float(self.settings.get("overlay_opacity", DEFAULT_OVERLAY_OPACITY) or 0.0)
-        image_overlay_color = self.settings.get("image_overlay_color", DEFAULT_IMAGE_OVERLAY_COLOR) or ""
-        image_overlay_opacity = float(self.settings.get("image_overlay_opacity", DEFAULT_IMAGE_OVERLAY_OPACITY) or 0.0)
         overlay_image_opacity = float(self.settings.get("overlay_image_opacity", DEFAULT_OVERLAY_IMAGE_OPACITY) or 0.0)
         header_overlay_opacity = float(self.settings.get("header_overlay_opacity", DEFAULT_HEADER_OVERLAY_OPACITY) or 0.0)
         accent_color = self.settings.get("accent_color", DEFAULT_ACCENT_COLOR) or ""
@@ -665,8 +577,6 @@ class Plugin(BasePlugin):
             "mode": mode,
             "overlay_color": overlay_color,
             "overlay_opacity": overlay_opacity,
-            "image_overlay_color": self._parse_hex_color(image_overlay_color, DEFAULT_IMAGE_OVERLAY_COLOR),
-            "image_overlay_opacity": image_overlay_opacity,
             "overlay_image_opacity": overlay_image_opacity,
             "header_overlay_opacity": header_overlay_opacity,
             "header_transparent": bool(self.settings.get("header_transparent", False)),
@@ -677,6 +587,7 @@ class Plugin(BasePlugin):
             "text_outline_size": max(1, min(3, int(self.settings.get("text_outline_size", DEFAULT_TEXT_OUTLINE_SIZE) or DEFAULT_TEXT_OUTLINE_SIZE))),
             "overlay_radius": max(0, min(24, int(self.settings.get("overlay_radius", DEFAULT_OVERLAY_RADIUS) or 0))),
             "accent_color": self._parse_hex_color(accent_color, DEFAULT_ACCENT_COLOR),
+            "findbar_color": self._parse_hex_color(self.settings.get("findbar_color", "") or "", DEFAULT_FINDBAR_COLOR),
             "background_effect": self.settings.get("background_effect", DEFAULT_BACKGROUND_EFFECT) or "none",
             "effect_strength": int(self.settings.get("effect_strength", DEFAULT_EFFECT_STRENGTH) or 0),
             "overlay_image_path": self._clean_path(self.settings.get("overlay_image_path", "")),
@@ -697,6 +608,7 @@ class Plugin(BasePlugin):
 
         ui = self._ui_config()
         config["ui_fonts"] = {key: ui.get(key, "") or "" for key in FONT_SELECTORS}
+        config["ui_colors"] = {config_key: ui.get(config_key, "") or "" for _w, config_key, _l, _d in COLOR_LABELS}
 
         return config
 
@@ -811,19 +723,6 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
-    def _add_overlay_scrim(self, Gtk, overlay, config):
-        """Darken the background image uniformly (independent of the text tint)."""
-
-        opacity = float(config.get("image_overlay_opacity", 0.0) or 0.0)
-
-        if opacity <= 0.0:
-            return
-
-        scrim = Gtk.Box(hexpand=True, vexpand=True, visible=True)
-        self._add_class(Gtk, scrim, CSS_CLASS_IMAGE_OVERLAY)
-        self._tagged.append((scrim, CSS_CLASS_IMAGE_OVERLAY))
-        overlay.add_overlay(scrim)
-
     def _add_overlay_image(self, Gtk, overlay, config):
         """Lay the custom overlay image over the background (all background types)."""
 
@@ -848,6 +747,8 @@ class Plugin(BasePlugin):
             overlay_picture = Gtk.Picture(
                 visible=True, can_shrink=True, hexpand=True, vexpand=True
             )
+            overlay_picture.set_halign(Gtk.Align.FILL)
+            overlay_picture.set_valign(Gtk.Align.FILL)
             overlay_picture.set_paintable(overlay_texture)
             overlay_picture.set_content_fit(Gtk.ContentFit.COVER)
             overlay_picture.set_opacity(
@@ -967,8 +868,6 @@ class Plugin(BasePlugin):
 
             overlay = Gtk.Overlay(visible=True)
             overlay.set_child(picture)
-
-            self._add_overlay_scrim(Gtk, overlay, config)
 
             self._add_overlay_image(Gtk, overlay, config)
 
@@ -1096,422 +995,6 @@ class Plugin(BasePlugin):
 
         return None
 
-    def _apply_userlist_width(self, gtk):
-
-        # DISABLED — the room user list / buddy list are now owned by the
-        # standalone "Buddy List / User List Editor" plugin. This method used to
-        # hide/resize the room user list on every poll, which fought the editor
-        # and made the buddy/user-list panels flicker. Kept as a no-op.
-        return
-
-        Gtk = gtk["Gtk"]
-        width = int(self.settings.get("userlist_width", DEFAULT_USERLIST_WIDTH) or 0)
-        resizable = bool(self.settings.get("userlist_resizable", False))
-        hidden = bool(self.settings.get("userlist_hidden", False))
-
-        containers = self._find_userlist_containers(Gtk)
-        count = len(containers)
-
-        if count != getattr(self, "_last_userlist_count", None):
-            self.log("Room user list containers found: %d", (count,))
-            self._last_userlist_count = count
-
-        for container in containers:
-            if hidden:
-                try:
-                    container.set_visible(False)
-                except Exception:
-                    pass
-                continue
-
-            if resizable:
-                self._ensure_userlist_paned(Gtk, container, width)
-            else:
-                try:
-                    container.set_width_request(width)
-                except Exception:
-                    pass
-
-    def _ensure_userlist_paned(self, Gtk, users_container, width):
-
-        try:
-            parent = users_container.get_parent()
-            chat_paned = users_container.get_prev_sibling()
-        except Exception:
-            return
-
-        # The room user list sits in a plain Gtk.Box next to a Gtk.Paned (the
-        # chat view). After conversion its parent is a Gtk.Paned, so these
-        # checks also keep the operation idempotent.
-        if parent is None or chat_paned is None:
-            return
-
-        if not isinstance(parent, Gtk.Box) or not isinstance(chat_paned, Gtk.Paned):
-            return
-
-        try:
-            grandparent = parent.get_parent()
-        except Exception:
-            return
-
-        if grandparent is None or not isinstance(grandparent, Gtk.Box):
-            return
-
-        try:
-            users_container.set_width_request(width)
-
-            paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
-
-            if Gtk.get_major_version() >= 4:
-                parent.remove(chat_paned)
-                parent.remove(users_container)
-                grandparent.remove(parent)
-
-                paned.set_start_child(chat_paned)
-                paned.set_end_child(users_container)
-                paned.set_resize_start_child(True)
-                paned.set_shrink_start_child(False)
-                paned.set_resize_end_child(False)
-                paned.set_shrink_end_child(True)
-
-                grandparent.append(paned)
-            else:
-                parent.remove(chat_paned)
-                parent.remove(users_container)
-                grandparent.remove(parent)
-
-                paned.pack1(chat_paned, resize=True, shrink=False)
-                paned.pack2(users_container, resize=False, shrink=True)
-
-                grandparent.add(paned)
-
-            paned.set_visible(True)
-
-            try:
-                total = grandparent.get_allocated_width()
-            except Exception:
-                try:
-                    total = grandparent.get_width()
-                except Exception:
-                    total = 0
-
-            if total and total > width:
-                paned.set_position(total - width)
-
-            self.log("Made a room user list drag-resizable")
-        except Exception as exc:
-            self.log("User list resize conversion failed: %s", (exc,))
-
-    def _find_userlist_containers(self, Gtk):
-
-        containers = []
-        root = self._root or self._window
-
-        if root is None:
-            return containers
-
-        seen = set()
-
-        for widget in self._walk(Gtk, root):
-            if id(widget) in seen:
-                continue
-
-            seen.add(id(widget))
-
-            try:
-                if not isinstance(widget, Gtk.Box) or widget.get_hexpand():
-                    continue
-
-                if widget.get_width_request() <= 0:
-                    continue
-
-                # The room user list is the fixed-width box sitting next to the
-                # chat Gtk.Paned (its previous sibling), or inside it after the
-                # drag-resize conversion reparents it.
-                prev = widget.get_prev_sibling()
-                parent = widget.get_parent()
-
-                if isinstance(prev, Gtk.Paned) or isinstance(parent, Gtk.Paned):
-                    containers.append(widget)
-            except Exception:
-                continue
-
-        return containers
-
-    # --- buddy list / user list (ported from customizeuserlist) -------------
-
-    def _iter_horizontal_paned(self, Gtk, window):
-        """Yield horizontal Gtk.Paned widgets anywhere in the window tree."""
-
-        for widget in self._walk(Gtk, window):
-            if isinstance(widget, Gtk.Paned):
-                try:
-                    if widget.get_orientation() == Gtk.Orientation.HORIZONTAL:
-                        yield widget
-                except Exception:
-                    continue
-
-    @staticmethod
-    def _end_child(paned):
-        """Return a paned's end child (portable across GTK 3 and 4)."""
-
-        get_end = getattr(paned, "get_end_child", None)  # GTK 4
-
-        if get_end is not None:
-            try:
-                return get_end()
-            except Exception:
-                return None
-
-        get_child2 = getattr(paned, "get_child2", None)  # GTK 3
-
-        if get_child2 is not None:
-            try:
-                return get_child2()
-            except Exception:
-                return None
-
-        return None
-
-    def _has_visible_child(self, Gtk, container):
-
-        if container is None:
-            return False
-
-        try:
-            for child in self._iter_children(Gtk, container):
-                try:
-                    if child.get_visible():
-                        return True
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        return False
-
-    def _iter_userlist_containers(self, Gtk, window):
-        """Yield every per-room member list (matched by Gtk.Builder id)."""
-
-        for widget in self._walk(Gtk, window):
-            if self._widget_id(widget) == USERLIST_CONTAINER_ID:
-                yield widget
-
-    def _apply_buddy_list(self, gtk):
-
-        # DISABLED — see _apply_userlist_width. Buddy-list width/hide now live in
-        # the "Buddy List / User List Editor" plugin.
-        return
-
-        if not gtk:
-            return
-
-        Gtk = gtk["Gtk"]
-        window = self._find_main_window(Gtk)
-
-        if window is None:
-            return
-
-        for paned in self._iter_horizontal_paned(Gtk, window):
-            self._apply_buddy_paned(Gtk, paned)
-
-    def _apply_buddy_paned(self, Gtk, paned):
-
-        hidden = bool(self.settings.get("buddy_hidden", False))
-        width = int(self.settings.get("buddy_width", DEFAULT_BUDDY_WIDTH))
-
-        end = self._end_child(paned)
-
-        if end is None:
-            return
-
-        # Only the two native buddy-list containers; leave everything else
-        # (the member list, or any third-party synthetic paned) alone.
-        tag = self._widget_id(end)
-
-        if tag not in BUDDY_LIST_END_IDS:
-            return
-
-        if hidden:
-            try:
-                end.set_visible(False)
-            except Exception:
-                pass
-            return
-
-        # Only manage the container that actually holds the buddy list right
-        # now; leave Nicotine+'s own state alone for empty containers.
-        if not self._has_visible_child(Gtk, end):
-            return
-
-        try:
-            end.set_visible(True)
-        except Exception:
-            pass
-
-        if tag in self._applied_buddy_width:
-            return
-
-        if self._set_buddy_width(paned, width):
-            self._applied_buddy_width.add(tag)
-
-    def _set_buddy_width(self, paned, width):
-
-        try:
-            total = paned.get_allocated_width()
-        except Exception:
-            return False
-
-        if total <= 0:
-            # Not allocated yet (e.g. Chatrooms tab never opened). Retry later.
-            return False
-
-        width = max(BUDDY_MIN_WIDTH, min(int(width), BUDDY_MAX_WIDTH, total - 1))
-        position = total - width  # horizontal paned: position == start-child width
-
-        if position < 0:
-            position = 0
-
-        try:
-            paned.set_position(position)
-            return True
-        except Exception:
-            return False
-
-    def _restore_userlist_visibility(self):
-
-        gtk = self._get_gtk()
-
-        if not gtk:
-            return
-
-        Gtk = gtk["Gtk"]
-        window = self._find_main_window(Gtk)
-
-        if window is None:
-            return
-
-        for container in self._iter_userlist_containers(Gtk, window):
-            try:
-                container.set_visible(True)
-            except Exception:
-                pass
-
-    def _restore_userlists(self):
-        """Un-hide anything the plugin had hidden, on disable/unload."""
-
-        gtk = self._get_gtk()
-
-        if not gtk:
-            return
-
-        Gtk = gtk["Gtk"]
-        window = self._find_main_window(Gtk)
-
-        if window is None:
-            return
-
-        for paned in self._iter_horizontal_paned(Gtk, window):
-            end = self._end_child(paned)
-
-            if end is not None and self._has_visible_child(Gtk, end):
-                try:
-                    end.set_visible(True)
-                except Exception:
-                    pass
-
-        for container in self._iter_userlist_containers(Gtk, window):
-            try:
-                container.set_visible(True)
-            except Exception:
-                pass
-
-        self._applied_buddy_width = set()
-
-    def userlist_command(self, args, **_unused):
-
-        self.output(
-            "Buddy-list / user-list controls moved to the 'Buddy List / User List "
-            "Editor' plugin — use /buddylist instead."
-        )
-        return True
-
-        action = (args or "").strip().lower()
-
-        if action in {"", "settings", "gui", "options", "open"}:
-            return self._open_settings()
-
-        gtk = self._get_gtk()
-
-        if action in {"hide-buddy", "hide-buddies"}:
-            self.settings["buddy_hidden"] = True
-            self._applied_buddy_width = set()
-
-            if gtk:
-                self._apply_buddy_list(gtk)
-
-            self._signature = self._current_signature()
-            self.output("Buddy-list sidebar hidden.")
-            return True
-
-        if action in {"show-buddy", "show-buddies"}:
-            self.settings["buddy_hidden"] = False
-            self._applied_buddy_width = set()
-
-            if gtk:
-                self._apply_buddy_list(gtk)
-
-            self._signature = self._current_signature()
-            self.output("Buddy-list sidebar shown.")
-            return True
-
-        if action in {"hide-users", "hide-userlist"}:
-            self.settings["userlist_hidden"] = True
-
-            if gtk:
-                self._apply_userlist_width(gtk)
-
-            self._signature = self._current_signature()
-            self.output("Room user list hidden.")
-            return True
-
-        if action in {"show-users", "show-userlist"}:
-            self.settings["userlist_hidden"] = False
-
-            if gtk:
-                self._restore_userlist_visibility()
-                self._apply_userlist_width(gtk)
-
-            self._signature = self._current_signature()
-            self.output("Room user list shown.")
-            return True
-
-        # Backwards-compatible shorthand: hide/show the buddy list.
-        if action in {"hide", "on", "true"}:
-            self.settings["buddy_hidden"] = True
-            self._applied_buddy_width = set()
-
-            if gtk:
-                self._apply_buddy_list(gtk)
-
-            self._signature = self._current_signature()
-            self.output("Buddy-list sidebar hidden.")
-            return True
-
-        if action in {"show", "off", "false"}:
-            self.settings["buddy_hidden"] = False
-            self._applied_buddy_width = set()
-
-            if gtk:
-                self._apply_buddy_list(gtk)
-
-            self._signature = self._current_signature()
-            self.output("Buddy-list sidebar shown.")
-            return True
-
-        self.output("Usage: /userlist [settings|hide-buddy|show-buddy|hide-users|show-users]")
-        return True
-
     # --- GIF background (GTK 4) ----------------------------------------------
 
     def _setup_gif_background(self, gtk, window, config):
@@ -1549,7 +1032,6 @@ class Plugin(BasePlugin):
             overlay = Gtk.Overlay(visible=True)
             overlay.set_child(picture)
 
-            self._add_overlay_scrim(Gtk, overlay, config)
             self._add_overlay_image(Gtk, overlay, config)
 
             window.set_child(None)          # detach the original content
@@ -1597,7 +1079,6 @@ class Plugin(BasePlugin):
             overlay = Gtk.Overlay(visible=True)
             overlay.set_child(video)
 
-            self._add_overlay_scrim(Gtk, overlay, config)
             self._add_overlay_image(Gtk, overlay, config)
 
             window.set_child(None)          # detach the original content
@@ -1762,18 +1243,25 @@ class Plugin(BasePlugin):
         self._build_settings_window(gtk)
         return True
 
+    def _big_title(self, Gtk, text):
+
+        label = Gtk.Label(xalign=0.0)
+        label.set_markup(f'<span size="x-large" weight="bold">{text}</span>')
+        label.set_margin_top(10)
+        label.set_margin_bottom(6)
+        return label
+
     def _build_settings_window(self, gtk):
 
         Gtk = gtk["Gtk"]
+        Gdk = gtk["Gdk"]
 
         main_window = self._find_main_window(Gtk)
 
-        # Match Nicotine+'s native Preferences window size so the page isn't
-        # cramped (content was wrapping and forcing a huge window).
         window = Gtk.Window(title="Theme Customizer Settings")
-        window.set_default_size(960, 650)
+        window.set_default_size(720, 760)
         window.set_resizable(True)
-        window.set_size_request(640, 440)
+        window.set_size_request(520, 480)
 
         if main_window is not None:
             try:
@@ -1784,62 +1272,52 @@ class Plugin(BasePlugin):
         self._settings_window = window
         self._settings_widgets = {}
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        window.set_child(content)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_hexpand(True)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
 
-        stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, vhomogeneous=False)
-        stack.set_hexpand(True)
-        stack.set_vexpand(True)
-        stack.add_titled(self._build_background_page(Gtk, gtk["Gdk"]), "background", "Background")
-        stack.add_titled(self._build_overlay_page(Gtk, gtk["Gdk"]), "overlay", "Overlay")
-        stack.add_titled(self._build_titlebar_page(Gtk, gtk["Gdk"]), "titlebar", "Title bar")
-        stack.add_titled(self._build_accent_page(Gtk, gtk["Gdk"]), "accent", "Accent")
-        stack.add_titled(self._build_chat_page(Gtk, gtk["Gdk"]), "chat", "Chat")
-        stack.add_titled(self._build_highlight_page(Gtk, gtk["Gdk"]), "highlight", "Highlight")
-        stack.add_titled(self._build_layout_page(Gtk, gtk["Gdk"]), "layout", "Layout")
-        stack.add_titled(self._build_presets_page(Gtk), "presets", "Presets")
+        box.append(self._big_title(Gtk, "Background"))
+        box.append(self._build_background_page(Gtk, Gdk))
+        box.append(self._big_title(Gtk, "Overlay"))
+        box.append(self._build_overlay_page(Gtk, Gdk))
+        box.append(self._big_title(Gtk, "Title bar"))
+        box.append(self._build_titlebar_page(Gtk, Gdk))
+        box.append(self._big_title(Gtk, "Accent"))
+        box.append(self._build_accent_page(Gtk, Gdk))
+        box.append(self._big_title(Gtk, "Chat"))
+        box.append(self._build_chat_page(Gtk, Gdk))
+        box.append(self._big_title(Gtk, "Highlight"))
+        box.append(self._build_highlight_page(Gtk, Gdk))
+        box.append(self._big_title(Gtk, "Layout"))
+        box.append(self._build_layout_page(Gtk, Gdk))
+        box.append(self._big_title(Gtk, "Presets"))
+        box.append(self._build_presets_page(Gtk))
 
-        sidebar = Gtk.StackSidebar()
-        sidebar.set_stack(stack)
-
-        sidebar_scroll = Gtk.ScrolledWindow()
-        sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        sidebar_scroll.set_size_request(170, -1)
-        sidebar_scroll.set_propagate_natural_width(False)
-        sidebar_scroll.set_child(sidebar)
-
-        page_scroll = Gtk.ScrolledWindow()
-        page_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        page_scroll.set_hexpand(True)
-        page_scroll.set_vexpand(True)
-        page_scroll.set_propagate_natural_width(False)
-        page_scroll.set_propagate_natural_height(False)
-        page_scroll.set_child(stack)
-
-        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        body.set_hexpand(True)
-        body.set_vexpand(True)
-        body.append(sidebar_scroll)
-        body.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-        body.append(page_scroll)
-        content.append(body)
-
-        action_bar = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
-            margin_top=12, margin_bottom=12, margin_start=12, margin_end=12
-        )
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        footer.set_margin_top(12)
 
         live_hint = Gtk.Label(label="Changes apply immediately", xalign=0)
         live_hint.add_css_class("dim-label")
+        live_hint.set_hexpand(True)
 
         close_button = Gtk.Button(label="Close")
         close_button.add_css_class("suggested-action")
         close_button.connect("clicked", self._on_settings_close_button)
 
-        action_bar.append(live_hint)
-        action_bar.append(Gtk.Label(hexpand=True))
-        action_bar.append(close_button)
-        content.append(action_bar)
+        footer.append(live_hint)
+        footer.append(close_button)
+        box.append(footer)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_hexpand(True)
+        scrolled.set_vexpand(True)
+        scrolled.set_child(box)
+
+        window.set_child(scrolled)
 
         self._connect_live(Gtk)
 
@@ -1848,24 +1326,27 @@ class Plugin(BasePlugin):
 
     def _build_background_page(self, Gtk, Gdk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
-        )
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
         enable_switch = Gtk.Switch(active=bool(self.settings.get("enabled", True)), valign=Gtk.Align.CENTER)
         self._add_row(Gtk, page, "Enable custom background", enable_switch)
 
-        type_dropdown = self._make_dropdown(
-            Gtk, ["image", "color", "gif", "webm"], self.settings.get("background_type", "image")
+        self._add_path_row(
+            Gtk, page, "Background image / GIF", self.settings.get("image_path", ""), "image_path",
+            tooltip="Accepts images and animated GIFs. The type is detected automatically from the file."
         )
-        self._add_row(Gtk, page, "Background type", type_dropdown)
 
-        self._add_path_row(Gtk, page, "Background image", self.settings.get("image_path", ""), "image_path")
-
-        bg_color_button = self._add_color_control(
-            Gtk, Gdk, page, "Background color", self.settings.get("color", DEFAULT_COLOR), "bg_color"
+        self._add_color_control(
+            Gtk, Gdk, page, "Background color (solid)",
+            self.settings.get("color", DEFAULT_COLOR), "bg_color"
         )
+
+        solid_hint = Gtk.Label(
+            label="To use a solid color background, clear the image path above.",
+            xalign=0, wrap=True
+        )
+        solid_hint.add_css_class("dim-label")
+        page.append(solid_hint)
 
         mode_dropdown = self._make_dropdown(
             Gtk, ["fit", "fill", "tile"], self.settings.get("mode", "fill")
@@ -1873,7 +1354,7 @@ class Plugin(BasePlugin):
         self._add_row(Gtk, page, "Background mode", mode_dropdown)
 
         effect_dropdown = self._make_dropdown(
-            Gtk, ["none", "blur", "grayscale", "sepia", "saturate", "hue-rotate", "invert"],
+            Gtk, ["none", "grayscale", "sepia", "saturate", "hue-rotate", "invert"],
             self.settings.get("background_effect", DEFAULT_BACKGROUND_EFFECT)
         )
         self._add_row(Gtk, page, "Background effect", effect_dropdown)
@@ -1881,8 +1362,14 @@ class Plugin(BasePlugin):
         effect_control = self._make_effect_strength_control(Gtk, int(self.settings.get("effect_strength", DEFAULT_EFFECT_STRENGTH)))
         self._add_row(Gtk, page, "Effect strength", effect_control)
 
+        effect_hint = Gtk.Label(
+            label="Effects apply to the whole window, not just the background image.",
+            xalign=0, wrap=True
+        )
+        effect_hint.add_css_class("dim-label")
+        page.append(effect_hint)
+
         self._settings_widgets["enable_switch"] = enable_switch
-        self._settings_widgets["type_dropdown"] = type_dropdown
         self._settings_widgets["mode_dropdown"] = mode_dropdown
         self._settings_widgets["effect_dropdown"] = effect_dropdown
 
@@ -1890,10 +1377,7 @@ class Plugin(BasePlugin):
 
     def _build_overlay_page(self, Gtk, Gdk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
-        )
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
         text_heading = Gtk.Label(xalign=0)
         text_heading.set_markup('<span size="large" weight="bold">Under-text readability tint</span>')
@@ -1908,21 +1392,6 @@ class Plugin(BasePlugin):
             Gtk, float(self.settings.get("overlay_opacity", DEFAULT_OVERLAY_OPACITY)), "opacity_scale"
         )
         self._add_row(Gtk, page, "Text tint opacity", text_opacity)
-
-        image_heading = Gtk.Label(xalign=0)
-        image_heading.set_markup('<span size="large" weight="bold">Background image darkening</span>')
-        image_heading.set_margin_top(6)
-        page.append(image_heading)
-
-        self._add_color_control(
-            Gtk, Gdk, page, "Image darken color",
-            self.settings.get("image_overlay_color", DEFAULT_IMAGE_OVERLAY_COLOR), "image_overlay_color"
-        )
-
-        image_opacity = self._make_opacity_control(
-            Gtk, float(self.settings.get("image_overlay_opacity", DEFAULT_IMAGE_OVERLAY_OPACITY)), "image_opacity_scale"
-        )
-        self._add_row(Gtk, page, "Image darken opacity", image_opacity)
 
         overlay_image_heading = Gtk.Label(xalign=0)
         overlay_image_heading.set_markup('<span size="large" weight="bold">Overlay image</span>')
@@ -1954,15 +1423,20 @@ class Plugin(BasePlugin):
 
     def _build_titlebar_page(self, Gtk, Gdk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
-        )
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
         self._add_path_row(
             Gtk, page, "Title bar image", self.settings.get("header_image_path", ""), "header_image_path",
             tooltip="Clear the path field to remove the image."
         )
+
+        image_hint = Gtk.Label(
+            label="With a title bar image set, the title bar cannot be made "
+                  "transparent or translucent - the image fills the bar instead.",
+            xalign=0, wrap=True
+        )
+        image_hint.add_css_class("dim-label")
+        page.append(image_hint)
 
         header_box = self._make_opacity_control(
             Gtk, float(self.settings.get("header_overlay_opacity", DEFAULT_HEADER_OVERLAY_OPACITY)), "header_scale"
@@ -1999,49 +1473,20 @@ class Plugin(BasePlugin):
 
     def _build_layout_page(self, Gtk, Gdk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+
+        note = Gtk.Label(xalign=0, wrap=True)
+        note.set_markup(
+            '<span size="large" weight="bold">Settings moved to separate plugin '
+            '"User-buddylist editor" by kiquja</span>'
         )
-
-        buddy_heading = Gtk.Label(xalign=0)
-        buddy_heading.set_markup(
-            '<span size="x-large" weight="bold">BUDDY LIST (sliding frame)</span> '
-            '<span size="small" weight="bold" foreground="#c9862a">(IN DEV)</span>'
-        )
-        buddy_heading.set_margin_bottom(2)
-        page.append(buddy_heading)
-
-        buddy_width_control = self._make_buddy_width_control(
-            Gtk, int(self.settings.get("buddy_width", DEFAULT_BUDDY_WIDTH))
-        )
-        self._add_row(Gtk, page, "Buddy list width (px)", buddy_width_control)
-
-        self._make_switch_row(Gtk, page, "Hide the buddy-list sidebar", self.settings.get("buddy_hidden", False), "buddy_hidden")
-
-        userlist_heading = Gtk.Label(xalign=0)
-        userlist_heading.set_markup(
-            '<span size="x-large" weight="bold">ROOM USER LIST (member list)</span> '
-            '<span size="small" weight="bold" foreground="#c9862a">(IN DEV)</span>'
-        )
-        userlist_heading.set_margin_top(14)
-        userlist_heading.set_margin_bottom(2)
-        page.append(userlist_heading)
-
-        width_control = self._make_userlist_width_control(
-            Gtk, int(self.settings.get("userlist_width", DEFAULT_USERLIST_WIDTH))
-        )
-        self._add_row(Gtk, page, "Room user list width (px)", width_control)
-
-        self._make_switch_row(Gtk, page, "Drag-resizable user list (experimental)", self.settings.get("userlist_resizable", False), "userlist_resizable")
-        self._make_switch_row(Gtk, page, "Hide user list in chat rooms", self.settings.get("userlist_hidden", False), "userlist_hidden")
+        note.set_margin_top(10)
+        page.append(note)
 
         hint = Gtk.Label(
-            label="The buddy list is resized by moving Nicotine+'s native divider "
-                  "(you can still drag it). The room user list has no native divider, "
-                  "so its width is set directly. The drag-resizable option turns the "
-                  "user list into a draggable pane (turning it off again needs a "
-                  "Nicotine+ restart to revert).",
+            label="Buddy-list and room user-list width / hide / drag controls now live in "
+                  "the \"Buddy List / User List Editor\" plugin. Use /buddylist to open "
+                  "its settings.",
             xalign=0, wrap=True
         )
         hint.add_css_class("dim-label")
@@ -2051,10 +1496,7 @@ class Plugin(BasePlugin):
 
     def _build_accent_page(self, Gtk, Gdk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
-        )
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
         accent_button = self._add_color_control(
             Gtk, Gdk, page, "Accent color", self.settings.get("accent_color", DEFAULT_ACCENT_COLOR), "accent"
@@ -2119,10 +1561,7 @@ class Plugin(BasePlugin):
 
     def _build_chat_page(self, Gtk, Gdk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
-        )
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
         ui = self._ui_config()
 
@@ -2157,12 +1596,33 @@ class Plugin(BasePlugin):
         size_box.append(Gtk.Label(label="px", xalign=0))
         self._add_row(Gtk, page, "Outline thickness", size_box)
 
+        outline_hint = Gtk.Label(
+            label="Note: the text outline adds some visual lag, since every text "
+                  "element is re-rendered with a shadow on each change.",
+            xalign=0, wrap=True
+        )
+        outline_hint.add_css_class("dim-label")
+        page.append(outline_hint)
+
         for config_key, label in FONT_LABELS:
             self._add_font_row(Gtk, page, label, config_key)
 
         for widget_key, config_key, label, default_hex in COLOR_LABELS:
             initial = ui.get(config_key, "") or default_hex or ""
             self._add_chat_color_control(Gtk, Gdk, page, label, initial, widget_key)
+
+        grab_button = Gtk.Button(label="Grab color from background image")
+        grab_button.connect("clicked", self._on_grab_bg_color)
+
+        grab_entry = Gtk.Entry(hexpand=True, width_chars=9)
+        grab_entry.set_editable(False)
+        grab_entry.set_placeholder_text("#RRGGBB")
+        self._settings_widgets["grabbed_color_entry"] = grab_entry
+
+        grab_box = Gtk.Box(spacing=8)
+        grab_box.append(grab_button)
+        grab_box.append(grab_entry)
+        self._add_row(Gtk, page, "Background image color", grab_box)
 
         hint = Gtk.Label(
             label="These mirror Nicotine+'s chat/interface appearance settings. "
@@ -2177,10 +1637,7 @@ class Plugin(BasePlugin):
 
     def _build_presets_page(self, Gtk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
-        )
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
         name_entry = Gtk.Entry(hexpand=True)
         name_entry.set_placeholder_text("Preset name")
@@ -2196,6 +1653,7 @@ class Plugin(BasePlugin):
         listbox = Gtk.ListBox.new()
         listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
         listbox.set_vexpand(True)
+        listbox.set_size_request(-1, 140)
         self._settings_widgets["preset_listbox"] = listbox
 
         load_button = Gtk.Button(label="Load")
@@ -2609,6 +2067,41 @@ class Plugin(BasePlugin):
         self._apply_theme()
         self.output("Grabbed title bar color %s from the background image." % header_hex)
 
+    def _on_grab_bg_color(self, _button):
+        """Sample the background image and show its dominant color in a read-only field."""
+
+        gtk = self._get_gtk()
+
+        if not gtk:
+            return
+
+        path = self._clean_path(self.settings.get("image_path", ""))
+
+        if not path:
+            self.output("Set a background image first, then grab its color.")
+            return
+
+        expanded = os.path.expanduser(path)
+
+        if not os.path.isfile(expanded):
+            self.output("Background image not found: %s" % expanded)
+            return
+
+        avg, vibrant = self._image_colors(expanded)
+
+        if avg is None or vibrant is None:
+            self.output("Could not read colors from the background image.")
+            return
+
+        hex_value = "#%02x%02x%02x" % vibrant
+
+        entry = self._settings_widgets.get("grabbed_color_entry")
+
+        if entry is not None:
+            entry.set_text(hex_value)
+
+        self.output("Background image color: %s" % hex_value)
+
     def _set_color_widget(self, key, hex_value):
 
         gtk = self._get_gtk()
@@ -2960,94 +2453,6 @@ class Plugin(BasePlugin):
 
         return box
 
-    def _make_userlist_width_control(self, Gtk, value):
-
-        box = Gtk.Box(spacing=8)
-
-        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 120, 400, 10)
-        scale.set_digits(0)
-        scale.set_hexpand(True)
-        scale.set_value(value)
-
-        spin = Gtk.SpinButton.new_with_range(120, 400, 10)
-        spin.set_digits(0)
-        spin.set_width_chars(5)
-        spin.set_value(value)
-
-        label = Gtk.Label(label=f"{int(value)}px", width_chars=5, xalign=1)
-
-        def sync_from_scale(s, s_spin=spin, s_label=label):
-            v = int(round(s.get_value()))
-
-            if s_spin.get_value_as_int() != v:
-                s_spin.set_value(v)
-
-            s_label.set_text(f"{v}px")
-
-        def sync_from_spin(sp, sp_scale=scale, sp_label=label):
-            v = sp.get_value_as_int()
-
-            if int(round(sp_scale.get_value())) != v:
-                sp_scale.set_value(v)
-
-            sp_label.set_text(f"{v}px")
-
-        scale.connect("value-changed", sync_from_scale)
-        spin.connect("value-changed", sync_from_spin)
-
-        box.append(scale)
-        box.append(spin)
-        box.append(label)
-
-        self._settings_widgets["userlist_scale"] = scale
-        self._settings_widgets["userlist_spin"] = spin
-
-        return box
-
-    def _make_buddy_width_control(self, Gtk, value):
-
-        box = Gtk.Box(spacing=8)
-
-        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, BUDDY_MIN_WIDTH, BUDDY_MAX_WIDTH, 10)
-        scale.set_digits(0)
-        scale.set_hexpand(True)
-        scale.set_value(value)
-
-        spin = Gtk.SpinButton.new_with_range(BUDDY_MIN_WIDTH, BUDDY_MAX_WIDTH, 10)
-        spin.set_digits(0)
-        spin.set_width_chars(5)
-        spin.set_value(value)
-
-        label = Gtk.Label(label=f"{int(value)}px", width_chars=5, xalign=1)
-
-        def sync_from_scale(s, s_spin=spin, s_label=label):
-            v = int(round(s.get_value()))
-
-            if s_spin.get_value_as_int() != v:
-                s_spin.set_value(v)
-
-            s_label.set_text(f"{v}px")
-
-        def sync_from_spin(sp, sp_scale=scale, sp_label=label):
-            v = sp.get_value_as_int()
-
-            if int(round(sp_scale.get_value())) != v:
-                sp_scale.set_value(v)
-
-            sp_label.set_text(f"{v}px")
-
-        scale.connect("value-changed", sync_from_scale)
-        spin.connect("value-changed", sync_from_spin)
-
-        box.append(scale)
-        box.append(spin)
-        box.append(label)
-
-        self._settings_widgets["buddy_scale"] = scale
-        self._settings_widgets["buddy_spin"] = spin
-
-        return box
-
     # settings commit / actions ----------------------------------------------
 
     def _dropdown_value(self, dropdown):
@@ -3070,7 +2475,7 @@ class Plugin(BasePlugin):
             widgets = self._settings_widgets
 
             # Sync any pending hex entries into the color buttons.
-            for key in ("bg_color", "overlay_color", "image_overlay_color", "accent", "header_color", "text_outline_color", "find_color", "find_gradient_color"):
+            for key in ("bg_color", "overlay_color", "accent", "header_color", "text_outline_color", "find_color", "find_gradient_color", "findbar_color"):
                 button = widgets.get(f"{key}_button")
                 entry = widgets.get(f"{key}_entry")
 
@@ -3086,7 +2491,6 @@ class Plugin(BasePlugin):
 
             self.settings.update({
                 "enabled": widgets["enable_switch"].get_active(),
-                "background_type": self._dropdown_value(widgets["type_dropdown"]),
                 "image_path": widgets.get("image_path", self.settings.get("image_path", "")),
                 "color": self._rgba_to_hex(widgets["bg_color_button"].get_rgba()),
                 "mode": self._dropdown_value(widgets["mode_dropdown"]),
@@ -3094,8 +2498,6 @@ class Plugin(BasePlugin):
                 "effect_strength": int(round(widgets["effect_strength_scale"].get_value())),
                 "overlay_color": self._rgba_to_hex(widgets["overlay_color_button"].get_rgba()),
                 "overlay_opacity": widgets["opacity_scale"].get_value(),
-                "image_overlay_color": self._rgba_to_hex(widgets["image_overlay_color_button"].get_rgba()),
-                "image_overlay_opacity": widgets["image_opacity_scale"].get_value(),
                 "overlay_image_path": widgets.get("overlay_image_path", ""),
                 "overlay_image_opacity": widgets["overlay_image_opacity_scale"].get_value(),
                 "overlay_radius": int(round(widgets["overlay_radius_spin"].get_value())),
@@ -3108,11 +2510,7 @@ class Plugin(BasePlugin):
                 "text_outline_color": self._rgba_to_hex(widgets["text_outline_color_button"].get_rgba()),
                 "text_outline_size": int(round(widgets["text_outline_size_spin"].get_value())),
                 "accent_color": self._rgba_to_hex(widgets["accent_button"].get_rgba()),
-                "userlist_width": int(round(widgets["userlist_scale"].get_value())),
-                "userlist_resizable": widgets["userlist_resizable"].get_active(),
-                "userlist_hidden": widgets["userlist_hidden"].get_active(),
-                "buddy_width": int(round(widgets["buddy_scale"].get_value())),
-                "buddy_hidden": widgets["buddy_hidden"].get_active(),
+                "findbar_color": self._rgba_to_hex(widgets["findbar_color_button"].get_rgba()),
                 "find_enabled": widgets["find_enabled"].get_active(),
                 "find_style": self._dropdown_value(widgets["find_style_dropdown"]),
                 "find_color": self._rgba_to_hex(widgets["find_color_button"].get_rgba()),
@@ -3133,8 +2531,59 @@ class Plugin(BasePlugin):
                     ui[config_key] = self._chat_color_value(widget_key)
 
             self._apply_theme()
+            self._refresh_chat_tag_colors()
         finally:
             self._applying = False
+
+    def _refresh_chat_tag_colors(self):
+        """Re-apply Nicotine+'s chat tag colors (usernames, /me, highlights, URLs)."""
+
+        gtk = self._get_gtk()
+
+        if not gtk:
+            return
+
+        try:
+            from pynicotine.gtkgui.widgets.theme import update_tag_visuals
+        except Exception:
+            return
+
+        Gtk = gtk["Gtk"]
+        window = self._find_main_window(Gtk)
+
+        if window is None:
+            return
+
+        for widget in self._walk(Gtk, window):
+            if not isinstance(widget, Gtk.TextView):
+                continue
+
+            try:
+                buf = widget.get_buffer()
+            except Exception:
+                continue
+
+            if buf is None:
+                continue
+
+            tag_table = buf.get_tag_table()
+
+            if tag_table is None:
+                continue
+
+            def _refresh(tag, _visuals=update_tag_visuals):
+                try:
+                    color_id = getattr(tag, "color_id", None)
+
+                    if color_id:
+                        _visuals(tag, color_id)
+                except Exception:
+                    pass
+
+            try:
+                tag_table.foreach(_refresh)
+            except Exception:
+                continue
 
     def _on_settings_apply(self, *_args):
         self._read_and_commit()
@@ -3220,8 +2669,7 @@ class Plugin(BasePlugin):
         media_filter.set_name("Images & Videos")
 
         for pattern in (
-            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.svg", "*.webp", "*.tiff",
-            "*.webm", "*.mp4", "*.ogv", "*.mkv"
+            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.svg", "*.webp", "*.tiff"
         ):
             media_filter.add_pattern(pattern)
 
@@ -3332,10 +2780,13 @@ class Plugin(BasePlugin):
 
         rules.append(f".{CSS_CLASS_TRANSPARENT} {{ background-color: transparent; }}")
         rules.append(f".{CSS_CLASS_OVERLAY} {{ {self._overlay_css(config)} }}")
-        rules.append(f".{CSS_CLASS_IMAGE_OVERLAY} {{ {self._image_overlay_css(config)} }}")
 
         rules.append(f".{CSS_CLASS_HEADER} {{ {self._header_css(config)} }}")
         rules.append(f".{CSS_CLASS_FILTER} {{ {self._ui_filter_css(config)} }}")
+        rules.append(
+            "searchbar, searchbar > revealer, searchbar > revealer > box "
+            f"{{ background-color: {config['findbar_color']} !important; background-image: none !important; }}"
+        )
 
         if config.get("text_outline_enabled"):
             outline = self._text_outline_shadows(config["text_outline_color"], config["text_outline_size"])
@@ -3348,6 +2799,11 @@ class Plugin(BasePlugin):
 
             if font_css:
                 rules.append(font_css)
+
+        color_css = self._chat_color_css(config.get("ui_colors", {}))
+
+        if color_css:
+            rules.append(color_css)
 
         return "\n".join(rules)
 
@@ -3390,6 +2846,49 @@ class Plugin(BasePlugin):
 
         return "filter: none;"
 
+    def _chat_color_css(self, colors):
+        """CSS for Nicotine+'s chat/interface colors (mirrors theme._get_custom_color_css)."""
+
+        rules = []
+
+        online = self._normalize_hex(colors.get("useronline", ""))
+        away = self._normalize_hex(colors.get("useraway", ""))
+        offline = self._normalize_hex(colors.get("useroffline", ""))
+
+        if online and away and offline:
+            rules.append(
+                f".user-status {{ -gtk-icon-palette: success {online}, warning {away}, error {offline}; }}"
+            )
+
+        for selector, key in (
+            (".notebook-tab", "tab_default"),
+            (".notebook-tab-changed", "tab_changed"),
+            (".notebook-tab-highlight", "tab_hilite"),
+            ("entry", "inputcolor"),
+            ("treeview .cell:not(:disabled):not(:selected):not(.progressbar)", "search"),
+        ):
+            color = self._normalize_hex(colors.get(key, ""))
+
+            if color:
+                rules.append(f"{selector} {{ color: {color}; }}")
+
+        textbg = self._normalize_hex(colors.get("textbg", ""))
+
+        if textbg:
+            rules.append(f"entry {{ background: {textbg}; }}")
+
+        if self._normalize_hex(colors.get("search", "")):
+            rules.append("treeview header { color: initial; }")
+
+        # Force tree views to re-render with the new colors (GTK caches them
+        # until the cursor moves over the widget otherwise).
+        rules.append(
+            "treeview { caret-color: #%06x; }\n"
+            "treeview popover { caret-color: initial; }" % random.randint(0, 0xFFFFFF)
+        )
+
+        return "\n".join(rules)
+
     def _font_css(self, selector, font):
 
         if not font:
@@ -3428,11 +2927,6 @@ class Plugin(BasePlugin):
         radius_css = f" border-radius: {radius}px;" if radius > 0 else ""
 
         return f"background-color: {self._color_to_rgba(config['overlay_color'], config['overlay_opacity'])};{radius_css}"
-
-    def _image_overlay_css(self, config):
-        """Uniform darkening tint drawn over the background image."""
-
-        return f"background-color: {self._color_to_rgba(config['image_overlay_color'], config['image_overlay_opacity'])};"
 
     def _header_css(self, config):
 
@@ -3946,10 +3440,23 @@ class Plugin(BasePlugin):
 
     def _build_highlight_page(self, Gtk, Gdk):
 
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12,
-            margin_top=18, margin_bottom=18, margin_start=18, margin_end=18
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+
+        findbar_heading = Gtk.Label(xalign=0)
+        findbar_heading.set_markup('<span size="large" weight="bold">Find bar (Ctrl+F)</span>')
+        page.append(findbar_heading)
+
+        self._add_color_control(
+            Gtk, Gdk, page, "Find bar color",
+            self.settings.get("findbar_color", DEFAULT_FINDBAR_COLOR), "findbar_color"
         )
+
+        findbar_hint = Gtk.Label(
+            label="Background color of the search bar that slides down on Ctrl+F.",
+            xalign=0, wrap=True
+        )
+        findbar_hint.add_css_class("dim-label")
+        page.append(findbar_hint)
 
         self._make_switch_row(
             Gtk, page, "Enable find highlighting",
@@ -4012,6 +3519,14 @@ class Plugin(BasePlugin):
         )
         hint.add_css_class("dim-label")
         page.append(hint)
+
+        effects_hint = Gtk.Label(
+            label="Note: the Background effects (grayscale, sepia, hue-rotate, etc.) also "
+                  "affect the highlight color, since they filter the whole window.",
+            xalign=0, wrap=True
+        )
+        effects_hint.add_css_class("dim-label")
+        page.append(effects_hint)
 
         # Live preview wiring (immediate, independent of the debounced apply)
         style_dropdown.connect("notify::selected", lambda *_a: self._sync_find_widgets())

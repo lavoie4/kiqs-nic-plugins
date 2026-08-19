@@ -1,4 +1,4 @@
 Version = "2.0.0"
 Authors = ["kiquja"]
 Name = "Theme Customizer"
-Description = "Customize the Nicotine+ theme: image/GIF/WebM or solid-color background with fit/fill/tile, blur and other effects, background darkening, colored or image overlay, title-bar image (or a fully transparent title bar), resizable/hideable buddy-list sidebar and room user list (with /userlist quick toggles), full chat/interface font and color mirroring, live-apply settings, named presets, color grabbing from the background image, and a configurable accent color."
+Description = "Customize the Nicotine+ theme: image/GIF/WebM or solid-color background with fit/fill/tile, blur and other effects (adjustable strength), background darkening, colored/image overlay, title-bar image (or a fully transparent title bar), full chat/interface font and color mirroring, text outline, find-term highlighting, live-apply settings, named presets with JSON export/import, color grabbing from the background image, and a configurable accent color. Companion plugin 'Buddy List / User List Editor' handles the buddy-list sidebar and room user list."
