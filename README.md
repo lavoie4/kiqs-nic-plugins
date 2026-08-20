@@ -43,7 +43,7 @@ probably the most polished, but still some major flaws. i made this with the goa
 
 SOON TO ADD:
 - options for text outline to just have it in some panes or text fields
-- 
+  
 ## userlist editor
 - gives the userlist-buddylist in the chatroom pane a "drawer" behavior (as in you can resize it horizontally)
 - options to completely hide the userlist \& buddylist.
