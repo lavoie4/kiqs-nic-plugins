@@ -1,5 +1,0 @@
-gtk
-pygobject
-requests
-pytest
-```
