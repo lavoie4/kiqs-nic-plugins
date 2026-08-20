@@ -1,4 +1,3 @@
-Help me to build a nicotine+ (client for soulseek) plugin. It uses GTK for it's interface and python for it's plugins. '
 Nicotine+ Docs https://nicotine-plus-nicotine-plus.mintlify.app/development/plugins/api-reference
 GTK Docs https://www.gtk.org/docs/
 Python docs https://docs.python.org/3/
