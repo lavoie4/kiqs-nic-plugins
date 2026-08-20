@@ -1,7 +1,7 @@
 \# kiquja's nicotine+ plugins! ≽(•⩊ •マ≼
 
 
-
+ 
 this is the directory for all the plugins ive made for soulseek client nicotine+. all made with AI assistance for both learning (I am beginner) \& writing the code
 
 
