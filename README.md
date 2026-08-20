@@ -15,15 +15,6 @@ thanks for checking out my stuff! ᓚ₍つ^. .^₎っ♡
 this is my baby of the bunch. not to get all emotional but as a black and trans person online i am constantly exposed to the most fucked up language towards people like me. i love soulseek, and want it to feel a little less hostile so i made this. /ᐠﹷ ‸ ﹷ ᐟ\\ﾉ
 
 SOON TO ADD:
-- make the text fields where the user inputs usernames and keywords a bit longer (vertically) and make the divider between the log view and the settings resizable (can reference ebehavior from the userlist editor plugin in the workspace folder)
--for "shitlisted users" field, make it so CTRL F works and highlights stuff in there 
-- slur counter should be treated as a filter in a drop down menu form next to the import log button, the options will be "most triggers" and "most recent" and "no filter" 
-- make it so that users can be selected in the slur counter, amnd have the same context menu options as when selecting users in the log 
-- add options in the plugin menu accessed by the base nicotine settings , for thre to be no GUI and only controlled by chat commands for all features. for this mode there is - no log view, for the user to see what they have applied they type /chatwatcher list and it'll list the last ~10 lines of the current shitlist log and the current keywords that get logged when used, and white listed users.
-- chat tabs dont seem to remember their position when the user restarts the program
-- shitlisted users field needs an update view button
-- for the CTRL -F field when viewing the log, needs options to only show entries that match(live in current build already) or to highlight them all (was live in previous builds, so just make the features co-exist)
-- new options for the slur counter, to add a cap on the amount of flags before person is shitlisted. ex: person has been flaged 20x = banned. flagged 10x - user has !!! nxt to name to show current standig. both values are customizable..
 - !!compatibility bug tht i cant recreate right now needs fixing
 
 ### played - see what other people are listening to
@@ -39,11 +30,7 @@ this is a bit of a fringe idea but i thought it would be cool, and add a bit of 
 this is mostly because i am a fiend for drama, and conceited. but this can be used for many things, like knowing when to jump into the conversation when someone is talking about your famous artist.
 
 SOON TO ADD:
-- add feature to right click in played pane's context menu for entries to add user to the "hide" list (do not show in /played) and add to ban+ignore list (hard, not soft for both)
-- add all settings into the right side of their corresponding feature's pane
-- remove any text inside the fields boxes and add it to their options section, it being inside the box makes the UI feel cluttered
-- add longer options to keep logs, 1 month and forever
-- add context menu option for entries to move the UI to the room the message was said in to all panes
+- not much yet..
 
 ## theme customizer
 [see it in action](https://imgur.com/a/nicotine-theme-plugin-theme-examples-feature-usage-lGUNR7X)
