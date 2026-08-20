@@ -1,0 +1,4 @@
+Version = "0.1.0"
+Authors = ["kiquja"]
+Name = "Page Doll"
+Description = "Decorative transparent character image (Tumblr-style page doll) in the Private Chat pane. PNG or animated GIF, layered on top of the chat area with user-set width, height and position. GTK 4 only. Standalone for now; intended to be merged into Theme Customizer."

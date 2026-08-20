@@ -1,0 +1,4 @@
+Version = "2026-08-17r00"
+Authors = ["kiquja"]
+Name = "Chat watcher v1"
+Description = "Merged Listenings + Keyword Watch + Shitlist: a Listenings tab, a Keyword Watch tab, keyword banning/ignoring, a temporary 'Ignore for...' menu, a Shitlisted Users list, and a message-exceptions whitelist."

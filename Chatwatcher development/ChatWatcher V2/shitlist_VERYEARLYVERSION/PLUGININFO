@@ -1,0 +1,4 @@
+Version = "2026-08-17r00"
+Authors = ["you"]
+Name = "Shitlist"
+Description = "Bans users who say keywords you define, and adds a temporary \"Ignore for...\" submenu to the user right-click menu."

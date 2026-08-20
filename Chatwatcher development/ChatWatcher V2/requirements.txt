@@ -1,0 +1,5 @@
+gtk
+pygobject
+requests
+pytest
+```

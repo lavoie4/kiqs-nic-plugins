@@ -1,0 +1,4 @@
+Version = "1.2.0"
+Authors = ["Kiquja"]
+Name = "Theme Customizer"
+Description = "Customize the Nicotine+ theme with an image, GIF or WebM background, solid colors, fit/fill/tile modes, blur/grayscale/sepia effects, a colored or image overlay, a title-bar image, an adjustable room user-list width, and a configurable accent color. Written by @Kiquja"

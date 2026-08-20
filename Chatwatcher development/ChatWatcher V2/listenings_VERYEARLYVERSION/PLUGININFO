@@ -1,0 +1,5 @@
+# PLUGININFO
+Version = "2026-08-17r00"
+Authors = ["AutoClaw"]
+Name = "Listenings"
+Description = "Logs other users' /nowplaying (/me) messages into a 'Listenings' tab, with retention and user blocking."
