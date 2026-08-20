@@ -7,14 +7,7 @@ thanks for checking out my stuff! ᓚ₍つ^. .^₎っ♡
 
 
 
-## chatwatcher
-
-
-
-this plugin has 3 features;
-
-
-
+## chatwatcher - this plugin has 3 features;
 ### shitlist - personal moderation tool
 
 - adds a tab that tracks keywords; how many times they where said and when they where last said.
