@@ -22,7 +22,8 @@ this is my baby of the bunch. not to get all emotional but as a black and trans 
 - can hide users from this tab.
 - however, because /now's are actually /me's, non music /me's will get thrown in there as well
 - [there is settings to deal with this for now](https://lewd.pics/p/?i=nCcV.png)
-is is a bit of a fringe idea but i thought it would be cool, and add a bit of personality.
+
+this s is a bit of a fringe idea but i thought it would be cool, and add a bit of personality.
 
 ### keywords - see who's talking about what! and when...
 this is mostly because i am a fiend for drama, and conceited. but this can be used for many things, like knowing when to jump into the conversation when someone is talking about your famous artist.
