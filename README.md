@@ -1,8 +1,6 @@
 # kiquja's nicotine+ plugins! ≽(•⩊ •マ≼
+this is the directory for all the plugins ive made for soulseek client nicotine+. all made with AI assistance for both learning (I am beginner) & writing the code, i am also relearning how to use Github, so expect the repo to get fucked up randomly..
 
-
- 
-this is the directory for all the plugins ive made for soulseek client nicotine+. all made with AI assistance for both learning (I am beginner) & writing the codei am also relearning how to use Github, so expect the repo to get fucked up randomly..
 thanks for checking out my stuff! ᓚ₍つ^. .^₎っ♡ 
 
 
