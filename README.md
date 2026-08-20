@@ -14,6 +14,14 @@ thanks for checking out my stuff! ᓚ₍つ^. .^₎っ♡
 
 this is my baby of the bunch. not to get all emotional but as a black and trans person online i am constantly exposed to the most fucked up language towards people like me. i love soulseek, and want it to feel a little less hostile so i made this. /ᐠﹷ ‸ ﹷ ᐟ\\ﾉ
 
+SOON TO ADD:
+- make the text fields where the user inputs usernames and keywords a bit longer, and for "shitlisted users" field, make it so CTRL F works and highlights stuff in there 
+- slur counter should be treated as a filter in a drop down menu form next to the import log button, the options will be "most triggers" and "most recent" and "no filter" 
+- make it so that users can be selected in the slur counter, amnd have the same context menu options as when selecting users in the log 
+- add options in the plugin menu accessed by the base nicotine settings , for thre to be no GUI and only controlled by chat commands for all features. for this mode there is - no log view, for the user to see what they have applied they type /chatwatcher list and it'll list the last ~10 lines of the current shitlist log and the current keywords that get logged when used, and white listed users.
+- a compatibility bug that only appears on another user's installation needs to be fixed 
+- chat tabs dont seem to remember their position when the user restarts the program
+
 ### played - see what other people are listening to
 
 - grabs /now's from #public and puts them in a tab.
