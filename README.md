@@ -13,7 +13,7 @@ thanks for checking out my stuff! ᓚ₍つ^. .^₎っ♡
 - adds a tab that tracks keywords; how many times they where said and when they where last said.
 - manual and automatic mode.
 - can whitelist users.
-- 
+
 this is my baby of the bunch. not to get all emotional but as a black and trans person online i am constantly exposed to the most fucked up language towards people like me. i love soulseek, and want it to feel a little less hostile so i made this. /ᐠﹷ ‸ ﹷ ᐟ\\ﾉ
 
 ### played - see what other people are listening to
