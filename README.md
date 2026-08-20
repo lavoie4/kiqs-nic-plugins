@@ -15,12 +15,16 @@ thanks for checking out my stuff! ᓚ₍つ^. .^₎っ♡
 this is my baby of the bunch. not to get all emotional but as a black and trans person online i am constantly exposed to the most fucked up language towards people like me. i love soulseek, and want it to feel a little less hostile so i made this. /ᐠﹷ ‸ ﹷ ᐟ\\ﾉ
 
 SOON TO ADD:
-- make the text fields where the user inputs usernames and keywords a bit longer, and for "shitlisted users" field, make it so CTRL F works and highlights stuff in there 
+- make the text fields where the user inputs usernames and keywords a bit longer (vertically) and make the divider between the log view and the settings resizable (can reference ebehavior from the userlist editor plugin in the workspace folder)
+-for "shitlisted users" field, make it so CTRL F works and highlights stuff in there 
 - slur counter should be treated as a filter in a drop down menu form next to the import log button, the options will be "most triggers" and "most recent" and "no filter" 
 - make it so that users can be selected in the slur counter, amnd have the same context menu options as when selecting users in the log 
 - add options in the plugin menu accessed by the base nicotine settings , for thre to be no GUI and only controlled by chat commands for all features. for this mode there is - no log view, for the user to see what they have applied they type /chatwatcher list and it'll list the last ~10 lines of the current shitlist log and the current keywords that get logged when used, and white listed users.
-- a compatibility bug that only appears on another user's installation needs to be fixed 
 - chat tabs dont seem to remember their position when the user restarts the program
+- shitlisted users field needs an update view button
+- for the CTRL -F field when viewing the log, needs options to only show entries that match(live in current build already) or to highlight them all (was live in previous builds, so just make the features co-exist)
+- new options for the slur counter, to add a cap on the amount of flags before person is shitlisted. ex: person has been flaged 20x = banned. flagged 10x - user has !!! nxt to name to show current standig. both values are customizable..
+- !!compatibility bug tht i cant recreate right now needs fixing
 
 ### played - see what other people are listening to
 
@@ -54,7 +58,7 @@ SOON TO ADD:
   
 ## userlist editor
 - gives the userlist-buddylist in the chatroom pane a "drawer" behavior (as in you can resize it horizontally)
-- options to completely hide the userlist \& buddylist.
+- options to completely hide the userlist & buddylist.
 
 SOON TO ADD:
 - userlist visible in all panes (like how buddy list has that option in base nicotine).
