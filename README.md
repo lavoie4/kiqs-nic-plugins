@@ -37,7 +37,7 @@ SOON TO ADD:
 - add context menu option for entries to move the UI to the room the message was said in to all panes
 
 ## theme customizer
-[see it in action](https://imgur.com/a/nicotine-theme-plugin-theme-examples-feature-usage-lGUNR7X)
+[see it in action](https://pixeldrain.com/l/Vex95kz1)
 - gif backgrounds
 - image effects (currently affects the entire window though lol
 - save, import and export theme presets
